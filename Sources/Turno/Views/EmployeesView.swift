@@ -80,7 +80,7 @@ struct EmployeeSheet: View {
 
     @State private var name = ""
     @State private var role: Role = .hookah
-    @State private var rate = "2500"
+    @State private var rate = "2300"
     @State private var active = true
 
     var body: some View {

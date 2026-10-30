@@ -12,7 +12,15 @@ final class Store: ObservableObject {
         var revenues: [String: DayRevenue] = [:]   // "yyyy-MM-dd" → DayRevenue
         var thresholds: [BonusThreshold] = []
         var checkUpdatesOnLaunch: Bool = true
+        var configVersion: Int?                    // версия конфигурации (миграции)
     }
+
+    /// Реальные пороги владельца и базовая ставка.
+    static let baseShiftRate: Double = 2300
+    static let defaultThresholds: [(revenue: Double, bonus: Double)] = [
+        (12000, 300), (16000, 300), (21000, 500),
+        (30000, 700), (40000, 700), (50000, 800),
+    ]
 
     @Published var data = AppData()
 
@@ -39,7 +47,21 @@ final class Store: ObservableObject {
         decoder.dateDecodingStrategy = .deferredToDate
         if let decoded = try? decoder.decode(AppData.self, from: raw) {
             data = decoded
+            migrate()
         }
+    }
+
+    /// Первая версия конфигурации: базовая ставка 2300 и пороги владельца.
+    private func migrate() {
+        guard (data.configVersion ?? 0) < 1 else { return }
+        data.configVersion = 1
+        for i in data.employees.indices {
+            data.employees[i].defaultShiftRate = Self.baseShiftRate
+        }
+        data.thresholds = Self.defaultThresholds.map {
+            BonusThreshold(revenueFrom: $0.revenue, amount: $0.bonus)
+        }
+        saveNow()
     }
 
     /// Отложенное (300 мс) атомарное сохранение — не пишем диск на каждый клик.
@@ -88,15 +110,15 @@ final class Store: ObservableObject {
     private func seedIfEmpty() {
         guard data.employees.isEmpty, data.thresholds.isEmpty else { return }
         data.employees = [
-            Employee(name: "Иван Иванов", role: .hookah, defaultShiftRate: 2500),
-            Employee(name: "Пётр Петров", role: .waiter, defaultShiftRate: 2000),
-            Employee(name: "Анна Смирнова", role: .admin, defaultShiftRate: 3000),
-            Employee(name: "Олег Кузнецов", role: .cook, defaultShiftRate: 2700),
+            Employee(name: "Иван Иванов", role: .hookah, defaultShiftRate: Self.baseShiftRate),
+            Employee(name: "Пётр Петров", role: .waiter, defaultShiftRate: Self.baseShiftRate),
+            Employee(name: "Анна Смирнова", role: .admin, defaultShiftRate: Self.baseShiftRate),
+            Employee(name: "Олег Кузнецов", role: .cook, defaultShiftRate: Self.baseShiftRate),
         ]
-        data.thresholds = [
-            BonusThreshold(revenueFrom: 30000, amount: 300),
-            BonusThreshold(revenueFrom: 50000, amount: 500),
-        ]
+        data.thresholds = Self.defaultThresholds.map {
+            BonusThreshold(revenueFrom: $0.revenue, amount: $0.bonus)
+        }
+        data.configVersion = 1
     }
 
     // MARK: - Доступ к сменам
