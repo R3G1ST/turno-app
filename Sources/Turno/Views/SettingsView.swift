@@ -6,18 +6,45 @@ import AppKit
 struct SettingsView: View {
     @EnvironmentObject var store: Store
     @EnvironmentObject var updater: Updater
+    @Environment(\.dismiss) private var dismiss
     @State private var backupMsg: String?
 
     var body: some View {
-        TabView {
-            thresholdsTab
-                .tabItem { Label("Надбавки", systemImage: "percent") }
-            dataTab
-                .tabItem { Label("Данные", systemImage: "externaldrive") }
-            updatesTab
-                .tabItem { Label("Обновления", systemImage: "arrow.down.circle") }
+        VStack(spacing: 0) {
+            header
+            Divider()
+            TabView {
+                thresholdsTab
+                    .tabItem { Label("Надбавки", systemImage: "percent") }
+                dataTab
+                    .tabItem { Label("Данные", systemImage: "externaldrive") }
+                updatesTab
+                    .tabItem { Label("Обновления", systemImage: "arrow.down.circle") }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(width: 520, height: 380)
+        .frame(width: 640, height: 480)
+    }
+
+    private var header: some View {
+        HStack {
+            Text("Настройки")
+                .font(.title3.weight(.semibold))
+            Spacer()
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 20))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut(.cancelAction)
+            .help("Закрыть (Esc)")
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+        .background(.ultraThinMaterial)
     }
 
     // MARK: Пороги

@@ -75,42 +75,14 @@ struct RootView: View {
     private var sidebar: some View {
         HStack(spacing: 4) {
             ForEach(Tab.allCases) { t in
-                Button {
+                SidebarButton(icon: t.icon, title: t.rawValue, selected: tab == t) {
                     tab = t
-                } label: {
-                    VStack(spacing: 4) {
-                        Image(systemName: t.icon)
-                            .font(.system(size: 18, weight: .medium))
-                        Text(t.rawValue)
-                            .font(.caption2)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10)
-                            .fill(tab == t ? AnyShapeStyle(.tint.opacity(0.18)) : AnyShapeStyle(.clear))
-                    )
                 }
-                .buttonStyle(.plain)
             }
 
-            Button {
+            SidebarButton(icon: "gearshape", title: "Настройки", selected: showSettings) {
                 showSettings = true
-            } label: {
-                VStack(spacing: 4) {
-                    Image(systemName: "gearshape")
-                        .font(.system(size: 18, weight: .medium))
-                    Text("Настройки")
-                        .font(.caption2)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 10)
-                .background(
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(showSettings ? AnyShapeStyle(.tint.opacity(0.18)) : AnyShapeStyle(.clear))
-                )
             }
-            .buttonStyle(.plain)
         }
         .padding(10)
         .background(.ultraThinMaterial)
@@ -129,5 +101,49 @@ struct RootView: View {
         case .payroll: PayrollView()
         case .employees: EmployeesView()
         }
+    }
+}
+
+// MARK: - Кнопка панели с мгновенной отдачей
+
+/// Кастомный стиль: подсветка и лёгкое сжатие появляются сразу при нажатии,
+/// клик срабатывает на всей площади кнопки.
+struct SidebarPressStyle: ButtonStyle {
+    var selected: Bool
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(selected ? Color.primary : Color.secondary)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(
+                        selected
+                        ? AnyShapeStyle(Color.accentColor.opacity(0.18))
+                        : AnyShapeStyle(configuration.isPressed ? Color.primary.opacity(0.08) : Color.clear)
+                    )
+            )
+            .scaleEffect(configuration.isPressed ? 0.94 : 1.0)
+            .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
+            .contentShape(Rectangle())
+    }
+}
+
+struct SidebarButton: View {
+    let icon: String
+    let title: String
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 18, weight: .medium))
+                Text(title)
+                    .font(.caption2)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+        }
+        .buttonStyle(SidebarPressStyle(selected: selected))
     }
 }
