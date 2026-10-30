@@ -1,20 +1,19 @@
 import SwiftUI
 
-// MARK: - Главный экран: месячная сетка графика
+// MARK: - Главный экран: месячный календарь
 
 struct ScheduleView: View {
     @EnvironmentObject var store: Store
     @State private var month: Date = Calendar.current.startOfDay(for: Date())
-    @State private var selectedDay: Date?
+    @State private var editedDay: Date?
+    @State private var showTemplates = false
 
-    private var cal: Calendar { Calendar.current }
-    private var daysInMonth: [Date] {
-        guard let interval = cal.dateInterval(of: .month, for: month) else { return [] }
-        let count = Int(interval.duration / 86400)
-        return (0..<count).compactMap {
-            cal.date(byAdding: .day, value: $0, to: interval.start)
-        }
+    private var cal: Calendar {
+        var c = Calendar.current
+        c.firstWeekday = 2 // понедельник
+        return c
     }
+
     private var monthTitle: String {
         let f = DateFormatter()
         f.locale = Locale(identifier: "ru_RU")
@@ -22,15 +21,74 @@ struct ScheduleView: View {
         return f.string(from: month).capitalized
     }
 
+    /// Все дни месяца + пустые ячейки для выравнивания по неделям.
+    private var calendarDays: [Date?] {
+        guard let interval = cal.dateInterval(of: .month, for: month) else { return [] }
+        let count = Int(interval.duration / 86400)
+        let days = (0..<count).compactMap { cal.date(byAdding: .day, value: $0, to: interval.start) }
+        guard let first = days.first else { return days }
+        let leading = cal.component(.weekday, from: first) - cal.firstWeekday
+        let pad = (leading + 7) % 7
+        return [Date?](repeating: nil, count: pad) + days
+    }
+
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 7)
+
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider()
-            gridScroll
+            ScrollView {
+                weekdayHeader
+                LazyVGrid(columns: columns, spacing: 8) {
+                    ForEach(Array(calendarDays.enumerated()), id: \.offset) { _, day in
+                        if let day {
+                            DayCell(month: $month, day: day)
+                                .contextMenu { dayContextMenu(day) }
+                                .popover(isPresented: Binding(
+                                    get: { editedDay == day },
+                                    set: { if !$0 { editedDay = nil } }
+                                )) {
+                                    DayEditor(day: day)
+                                        .environmentObject(store)
+                                }
+                                .onTapGesture { editedDay = day }
+                        } else {
+                            Color.clear.frame(height: 110)
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 10)
+                .padding(.bottom, 20)
+            }
+        }
+        .sheet(isPresented: $showTemplates) {
+            TemplatesSheet(month: month)
+                .environmentObject(store)
         }
     }
 
-    // MARK: Шапка с переключением месяца
+    // MARK: Шапка дней недели
+
+    private var weekdayHeader: some View {
+        let symbols = cal.veryShortWeekdaySymbols
+        // veryShortWeekdaySymbols: воскресенье первое — разворачиваем под неделю с понедельника
+        let ordered = Array(symbols[1...]) + [symbols[0]]
+        return HStack(spacing: 8) {
+            ForEach(Array(ordered.enumerated()), id: \.offset) { i, s in
+                Text(s)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(i >= 5 ? .red.opacity(0.7) : .secondary)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 10)
+        .padding(.bottom, 2)
+    }
+
+    // MARK: Шапка
 
     private var header: some View {
         HStack(spacing: 12) {
@@ -38,14 +96,18 @@ struct ScheduleView: View {
                 .buttonStyle(.borderless)
             Text(monthTitle)
                 .font(.title2.weight(.semibold))
-                .frame(width: 200)
+                .frame(minWidth: 190)
             Button { shiftMonth(1) } label: { Image(systemName: "chevron.right") }
                 .buttonStyle(.borderless)
             Button("Сегодня") { month = cal.startOfDay(for: Date()) }
                 .buttonStyle(.borderless)
-                .font(.callout)
 
             Spacer()
+
+            Button {
+                showTemplates = true
+            } label: { Label("Шаблоны заполнения", systemImage: "wand.and.stars") }
+                .buttonStyle(.borderless)
 
             legend
         }
@@ -55,199 +117,304 @@ struct ScheduleView: View {
     }
 
     private var legend: some View {
-        HStack(spacing: 12) {
-            ForEach([ShiftKind.morning, .evening, .full, .off]) { kind in
-                HStack(spacing: 5) {
-                    Circle().fill(kind.color).frame(width: 10, height: 10)
+        HStack(spacing: 10) {
+            ForEach([ShiftKind.morning, .evening, .full]) { kind in
+                HStack(spacing: 4) {
+                    Circle().fill(kind.color).frame(width: 9, height: 9)
                     Text(kind.rawValue).font(.caption).foregroundStyle(.secondary)
                 }
             }
         }
+        .padding(.leading, 8)
     }
 
     private func shiftMonth(_ delta: Int) {
         if let d = cal.date(byAdding: .month, value: delta, to: month) { month = d }
     }
 
-    // MARK: Сетка
-
-    private var gridScroll: some View {
-        let employees = store.data.employees.filter(\.active)
-        return ScrollView([.horizontal, .vertical]) {
-            VStack(alignment: .leading, spacing: 0) {
-                dayHeaderRow
-                Divider()
-                ForEach(employees) { emp in
-                    employeeRow(emp)
-                    Divider()
+    @ViewBuilder
+    private func dayContextMenu(_ day: Date) -> some View {
+        Button("Открыть день") { editedDay = day }
+        Divider()
+        Menu("Снять всех (сделать выходным)") {
+            ForEach(store.data.employees.filter(\.active)) { emp in
+                Button(emp.name) {
+                    store.setShift(Shift(kind: .off), employee: emp.id, date: day)
                 }
             }
         }
     }
+}
 
-    private var dayHeaderRow: some View {
-        HStack(spacing: 0) {
-            Text("Сотрудник")
-                .font(.caption.weight(.semibold))
-                .frame(width: 180, alignment: .leading)
-                .padding(.leading, 14)
-            ForEach(daysInMonth, id: \.self) { d in
-                let wd = cal.component(.weekday, from: d)
-                let isWeekend = wd == 1 || wd == 7
-                VStack(spacing: 1) {
-                    Text(weekdayInitial(d))
-                        .font(.system(size: 9))
-                        .foregroundStyle(isWeekend ? .red.opacity(0.8) : .secondary)
-                    Text("\(cal.component(.day, from: d))")
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
-                        .foregroundStyle(isWeekend ? .red : .primary)
-                }
-                .frame(width: 36, height: 34)
-                .background(isWeekend ? Color.red.opacity(0.05) : .clear)
-            }
+// MARK: - Ячейка дня календаря
+
+struct DayCell: View {
+    @EnvironmentObject var store: Store
+    @Binding var month: Date
+    let day: Date
+
+    private var cal: Calendar { Calendar.current }
+
+    private var isToday: Bool {
+        cal.isDateInToday(day)
+    }
+
+    private var isOtherMonth: Bool {
+        !cal.isDate(day, equalTo: month, toGranularity: .month)
+    }
+
+    private var workers: [(emp: Employee, shift: Shift)] {
+        store.data.employees.filter(\.active).compactMap { emp in
+            let s = store.resolvedShift(employee: emp.id, date: day)
+            return s.kind.isWork ? (emp, s) : nil
         }
-        .background(.ultraThinMaterial)
     }
 
-    private func weekdayInitial(_ d: Date) -> String {
-        let wd = cal.component(.weekday, from: d)
-        return ["В", "П", "В", "С", "Ч", "П", "С"][wd - 1]
-    }
+    private var revenue: DayRevenue { store.revenue(date: day) }
 
-    private func employeeRow(_ emp: Employee) -> some View {
-        HStack(spacing: 0) {
-            HStack(spacing: 6) {
-                Image(systemName: emp.role.icon)
-                    .foregroundStyle(emp.role.color)
-                    .font(.system(size: 12))
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(emp.name)
-                        .font(.system(size: 12, weight: .medium))
-                        .lineLimit(1)
-                    Text(emp.role.rawValue)
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("\(cal.component(.day, from: day))")
+                    .font(.system(size: 14, weight: isToday ? .bold : .medium, design: .rounded))
+                    .foregroundStyle(isToday ? Color.white : (isWeekend ? .red : .primary))
+                    .frame(width: 26, height: 22)
+                    .background(
+                        Circle().fill(isToday ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.clear))
+                    )
+                Spacer()
+                if revenue.total > 0 {
+                    Text("\(Int(revenue.total / 1000))k")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.green)
+                }
+            }
+
+            if workers.isEmpty {
+                Text("Выходной")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                Spacer(minLength: 0)
+            } else {
+                ForEach(workers.prefix(4), id: \.emp.id) { w in
+                    HStack(spacing: 4) {
+                        Circle().fill(w.emp.role.color).frame(width: 6, height: 6)
+                        Text(w.emp.name)
+                            .font(.system(size: 10))
+                            .lineLimit(1)
+                        Spacer(minLength: 2)
+                        Text(w.shift.kind.short)
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(w.shift.kind.color)
+                    }
+                }
+                if workers.count > 4 {
+                    Text("+\(workers.count - 4) ещё…")
                         .font(.system(size: 9))
                         .foregroundStyle(.secondary)
                 }
-            }
-            .frame(width: 180, alignment: .leading)
-            .padding(.leading, 14)
-            .contextMenu {
-                patternMenu(emp)
-                Divider()
-                Button("Очистить месяц") { clearMonth(emp) }
-            }
-
-            ForEach(daysInMonth, id: \.self) { d in
-                cell(emp, d)
+                Spacer(minLength: 0)
             }
         }
-        .frame(height: 40)
+        .padding(7)
+        .frame(height: 110, alignment: .topLeading)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(isToday
+                      ? AnyShapeStyle(Color.accentColor.opacity(0.10))
+                      : AnyShapeStyle(.ultraThinMaterial))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(isToday ? Color.accentColor : (isWeekend ? Color.red.opacity(0.25) : Color.gray.opacity(0.15)),
+                              lineWidth: isToday ? 1.5 : 1)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 12))
+        .opacity(isOtherMonth ? 0.4 : 1)
+        .help(helpText())
     }
 
-    private func cell(_ emp: Employee, _ d: Date) -> some View {
-        let shift = store.resolvedShift(employee: emp.id, date: d)
-        let wd = cal.component(.weekday, from: d)
-        let isWeekend = wd == 1 || wd == 7
-        return Button {
-            cycleShift(emp, d)
-        } label: {
-            Text(shift.kind.short)
-                .font(.system(size: 12, weight: .bold, design: .rounded))
-                .foregroundStyle(shift.kind.isWork ? .white : .secondary)
-                .frame(width: 36, height: 32)
-                .background(
-                    RoundedRectangle(cornerRadius: 7)
-                        .fill(shift.kind.isWork
-                             ? AnyShapeStyle(shift.kind.color)
-                             : AnyShapeStyle(shift.kind.color.opacity(isWeekend ? 0.10 : 0.18)))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 7)
-                        .strokeBorder(selectedDay == d ? Color.accentColor : .clear, lineWidth: 1.5)
-                )
-        }
-        .buttonStyle(.plain)
-        .contextMenu {
-            ForEach([ShiftKind.morning, .evening, .full, .off]) { kind in
-                Button {
-                    store.setShift(Shift(kind: kind), employee: emp.id, date: d)
-                } label: {
-                    Label(kind.rawValue, systemImage: kind == .off ? "moon" : "sun.max")
-                }
-            }
-            Divider()
-            Button("Скопировать неделю вправо") { copyWeekRight(emp, d) }
-        }
-        .help("\(emp.name) — \(dayString(d)) — \(shift.kind.rawValue)")
+    private var isWeekend: Bool {
+        let wd = cal.component(.weekday, from: day)
+        return wd == 1 || wd == 7
     }
 
-    private func dayString(_ d: Date) -> String {
+    private func helpText() -> String {
         let f = DateFormatter()
         f.locale = Locale(identifier: "ru_RU")
-        f.dateFormat = "d MMMM yyyy"
-        return f.string(from: d)
+        f.dateFormat = "d MMMM yyyy, EEEE"
+        let names = workers.map { $0.emp.name }.joined(separator: ", ")
+        return names.isEmpty ? f.string(from: day) : "\(f.string(from: day)): \(names)"
+    }
+}
+
+// MARK: - Редактор дня: выбор сотрудников
+
+struct DayEditor: View {
+    @EnvironmentObject var store: Store
+    @Environment(\.dismiss) private var dismiss
+    let day: Date
+
+    private var title: String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "ru_RU")
+        f.dateFormat = "d MMMM, EEEE"
+        return f.string(from: day).capitalized
     }
 
-    // MARK: Действия
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text(title).font(.headline)
+                Spacer()
+                Button("Готово") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(14)
 
-    /// Клик по ячейке: П → У → В → П … (выходной ставится последним).
-    private func cycleShift(_ emp: Employee, _ d: Date) {
-        let cur = store.resolvedShift(employee: emp.id, date: d).kind
-        let next: ShiftKind
-        switch cur {
-        case .full: next = .morning
-        case .morning: next = .evening
-        case .evening: next = .off
-        case .off: next = .full
+            Divider()
+
+            ScrollView {
+                VStack(spacing: 2) {
+                    ForEach(store.data.employees.filter(\.active)) { emp in
+                        EmployeeDayRow(day: day, employee: emp)
+                    }
+                }
+                .padding(10)
+            }
+            .frame(height: 320)
+
+            Divider()
+
+            let rev = store.revenue(date: day)
+            HStack {
+                Label("Выручка: \(Int(rev.total)) ₽", systemImage: "banknote")
+                    .font(.callout)
+                    .foregroundStyle(rev.total > 0 ? .green : .secondary)
+                Spacer()
+                Text("\(store.workedEmployees(date: day).count) на смене")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(12)
         }
-        store.setShift(Shift(kind: next), employee: emp.id, date: d)
+        .frame(width: 340)
     }
+}
 
-    @ViewBuilder
-    private func patternMenu(_ emp: Employee) -> some View {
-        Menu("Заполнить шаблон") {
-            ForEach(FillPattern.allCases) { p in
-                Button(p.rawValue) { fill(emp, pattern: p) }
+struct EmployeeDayRow: View {
+    @EnvironmentObject var store: Store
+    let day: Date
+    let employee: Employee
+
+    private var shift: Shift { store.resolvedShift(employee: employee.id, date: day) }
+    private var isWork: Bool { shift.kind.isWork }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle().fill(employee.role.color).frame(width: 8, height: 8)
+
+            Toggle(isOn: Binding(
+                get: { isWork },
+                set: { on in
+                    store.setShift(Shift(kind: on ? .full : .off), employee: employee.id, date: day)
+                }
+            )) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(employee.name).font(.callout)
+                    Text(employee.role.rawValue).font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            .toggleStyle(.switch)
+            .controlSize(.small)
+
+            if isWork {
+                Picker("", selection: Binding(
+                    get: { shift.kind },
+                    set: { store.setShift(Shift(kind: $0), employee: employee.id, date: day) }
+                )) {
+                    ForEach([ShiftKind.morning, .evening, .full]) { kind in
+                        Text(kind.short).tag(kind).help(kind.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 90)
             }
         }
-        Menu("Копировать") {
-            ForEach(FillPattern.allCases.filter { $0 != .allOff && $0 != .allFull }) { p in
-                Button("Прошлая неделя — \(p.rawValue)") { fill(emp, pattern: p) }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(isWork ? employee.role.color.opacity(0.08) : .clear)
+        )
+    }
+}
+
+// MARK: - Шаблоны заполнения месяца
+
+struct TemplatesSheet: View {
+    @EnvironmentObject var store: Store
+    @Environment(\.dismiss) private var dismiss
+    let month: Date
+
+    @State private var selected: UUID?
+    @State private var pattern: FillPattern = .twoTwo
+
+    private var cal: Calendar { Calendar.current }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Шаблоны заполнения месяца")
+                .font(.headline)
+
+            Picker("Сотрудник", selection: $selected) {
+                Text("—").tag(UUID?.none)
+                ForEach(store.data.employees.filter(\.active)) { emp in
+                    Text("\(emp.name) (\(emp.role.rawValue))").tag(Optional(emp.id))
+                }
+            }
+
+            Picker("Шаблон", selection: $pattern) {
+                ForEach(FillPattern.allCases) { p in
+                    Text(p.rawValue).tag(p)
+                }
+            }
+
+            Text("Шаблон заполнит весь месяц выбранному сотруднику. Смены — полные, дни отдыха — выходными.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack {
+                Spacer()
+                Button("Отмена") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Заполнить") {
+                    if let id = selected { apply(id) }
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+                .disabled(selected == nil)
             }
         }
+        .padding(22)
+        .frame(width: 420)
     }
 
-    private func fill(_ emp: Employee, pattern: FillPattern) {
-        for (i, d) in daysInMonth.enumerated() {
+    private func apply(_ emp: UUID) {
+        guard let interval = cal.dateInterval(of: .month, for: month) else { return }
+        let count = Int(interval.duration / 86400)
+        for i in 0..<count {
+            guard let d = cal.date(byAdding: .day, value: i, to: interval.start) else { continue }
             let kind: ShiftKind
             switch pattern {
             case .allOff: kind = .off
             case .allFull: kind = .full
             default:
                 let cycle = pattern.workDays! + pattern.restDays!
-                let phase = i % cycle
-                kind = phase < pattern.workDays! ? .full : .off
+                kind = (i % cycle) < pattern.workDays! ? .full : .off
             }
-            store.setShift(Shift(kind: kind), employee: emp.id, date: d)
-        }
-        store.saveNow()
-    }
-
-    private func clearMonth(_ emp: Employee) {
-        for d in daysInMonth {
-            store.setShift(Shift(kind: .off), employee: emp.id, date: d)
-        }
-        store.saveNow()
-    }
-
-    /// Копирует 7 дней недели, в которую попадает клик, в следующую неделю.
-    private func copyWeekRight(_ emp: Employee, _ d: Date) {
-        guard let weekStart = cal.dateInterval(of: .weekOfMonth, for: d)?.start else { return }
-        for offset in 0..<7 {
-            guard let src = cal.date(byAdding: .day, value: offset, to: weekStart),
-                  let dst = cal.date(byAdding: .day, value: offset + 7, to: weekStart)
-            else { continue }
-            store.setShift(store.resolvedShift(employee: emp.id, date: src), employee: emp.id, date: dst)
+            store.setShift(Shift(kind: kind), employee: emp, date: d)
         }
         store.saveNow()
     }
