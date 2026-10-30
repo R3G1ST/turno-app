@@ -8,19 +8,39 @@ struct SettingsView: View {
     @EnvironmentObject var updater: Updater
     @Environment(\.dismiss) private var dismiss
     @State private var backupMsg: String?
+    @State private var tab: Tab = .thresholds
+
+    enum Tab: String, CaseIterable, Identifiable {
+        case thresholds = "Надбавки"
+        case data = "Данные"
+        case updates = "Обновления"
+        var id: String { rawValue }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             header
-            TabView {
-                thresholdsTab
-                    .tabItem { Label("Надбавки", systemImage: "percent") }
-                dataTab
-                    .tabItem { Label("Данные", systemImage: "externaldrive") }
-                updatesTab
-                    .tabItem { Label("Обновления", systemImage: "arrow.down.circle") }
+            Picker("", selection: $tab) {
+                ForEach(Tab.allCases) { t in
+                    Text(t.rawValue).tag(t)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 18)
+            .padding(.top, 12)
+            .padding(.bottom, 4)
+
+            Group {
+                switch tab {
+                case .thresholds: thresholdsTab
+                case .data: dataTab
+                case .updates: updatesTab
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.horizontal, 18)
+            .padding(.bottom, 18)
         }
         .frame(width: 640, height: 480)
     }
