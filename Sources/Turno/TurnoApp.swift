@@ -36,6 +36,7 @@ struct RootView: View {
     @EnvironmentObject var store: Store
     @EnvironmentObject var updater: Updater
     @State private var tab: Tab = .schedule
+    @State private var showSettings = false
 
     enum Tab: String, CaseIterable, Identifiable {
         case schedule = "График"
@@ -92,9 +93,32 @@ struct RootView: View {
                 }
                 .buttonStyle(.plain)
             }
+
+            Button {
+                showSettings = true
+            } label: {
+                VStack(spacing: 4) {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 18, weight: .medium))
+                    Text("Настройки")
+                        .font(.caption2)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(showSettings ? AnyShapeStyle(.tint.opacity(0.18)) : AnyShapeStyle(.clear))
+                )
+            }
+            .buttonStyle(.plain)
         }
         .padding(10)
         .background(.ultraThinMaterial)
+        .sheet(isPresented: $showSettings) {
+            SettingsView()
+                .environmentObject(store)
+                .environmentObject(updater)
+        }
     }
 
     @ViewBuilder

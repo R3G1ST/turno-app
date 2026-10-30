@@ -118,11 +118,13 @@ struct ScheduleView: View {
 
     private var legend: some View {
         HStack(spacing: 10) {
-            ForEach([ShiftKind.morning, .evening, .full]) { kind in
-                HStack(spacing: 4) {
-                    Circle().fill(kind.color).frame(width: 9, height: 9)
-                    Text(kind.rawValue).font(.caption).foregroundStyle(.secondary)
-                }
+            HStack(spacing: 4) {
+                Circle().fill(ShiftKind.work.color).frame(width: 9, height: 9)
+                Text("Смена").font(.caption).foregroundStyle(.secondary)
+            }
+            HStack(spacing: 4) {
+                Circle().fill(Color.secondary.opacity(0.35)).frame(width: 9, height: 9)
+                Text("Выходной").font(.caption).foregroundStyle(.secondary)
             }
         }
         .padding(.leading, 8)
@@ -317,7 +319,7 @@ struct EmployeeDayRow: View {
             Toggle(isOn: Binding(
                 get: { isWork },
                 set: { on in
-                    store.setShift(Shift(kind: on ? .full : .off), employee: employee.id, date: day)
+                    store.setShift(Shift(kind: on ? .work : .off), employee: employee.id, date: day)
                 }
             )) {
                 VStack(alignment: .leading, spacing: 1) {
@@ -329,16 +331,9 @@ struct EmployeeDayRow: View {
             .controlSize(.small)
 
             if isWork {
-                Picker("", selection: Binding(
-                    get: { shift.kind },
-                    set: { store.setShift(Shift(kind: $0), employee: employee.id, date: day) }
-                )) {
-                    ForEach([ShiftKind.morning, .evening, .full]) { kind in
-                        Text(kind.short).tag(kind).help(kind.rawValue)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 90)
+                Text("полная смена")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
         }
         .padding(.vertical, 4)
@@ -409,10 +404,10 @@ struct TemplatesSheet: View {
             let kind: ShiftKind
             switch pattern {
             case .allOff: kind = .off
-            case .allFull: kind = .full
+            case .allFull: kind = .work
             default:
                 let cycle = pattern.workDays! + pattern.restDays!
-                kind = (i % cycle) < pattern.workDays! ? .full : .off
+                kind = (i % cycle) < pattern.workDays! ? .work : .off
             }
             store.setShift(Shift(kind: kind), employee: emp, date: d)
         }

@@ -33,29 +33,23 @@ enum Role: String, Codable, CaseIterable, Identifiable {
 // MARK: - Вид смены
 
 enum ShiftKind: String, Codable, CaseIterable, Identifiable {
-    case morning = "Утро"
-    case evening = "Вечер"
-    case full = "Полная"
+    case work = "Смена"
     case off = "Выходной"
 
     var id: String { rawValue }
 
-    var isWork: Bool { self != .off }
+    var isWork: Bool { self == .work }
 
     var color: Color {
         switch self {
-        case .morning: return .yellow
-        case .evening: return .indigo
-        case .full: return .green
+        case .work: return .green
         case .off: return .secondary.opacity(0.35)
         }
     }
 
     var short: String {
         switch self {
-        case .morning: return "У"
-        case .evening: return "В"
-        case .full: return "П"
+        case .work: return "✓"
         case .off: return "—"
         }
     }
