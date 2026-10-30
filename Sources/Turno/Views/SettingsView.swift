@@ -63,7 +63,7 @@ struct SettingsView: View {
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
-        .background(.ultraThinMaterial)
+        .background(WindowConfigurator())
     }
 
     // MARK: Пороги
@@ -211,5 +211,33 @@ struct UpdateSheet: View {
         }
         .padding(28)
         .frame(width: 420)
+    }
+}
+
+// MARK: - Уборка системной полоски-разделителя у листа настроек
+
+/// macOS рисует горизонтальный разделитель под шапкой листа (titlebar separator).
+/// Находим окно листа и отключаем его, а шапку делаем прозрачной.
+struct WindowConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let v = NSView()
+        DispatchQueue.main.async {
+            configure(v.window)
+        }
+        return v
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async {
+            configure(nsView.window)
+        }
+    }
+
+    private func configure(_ window: NSWindow?) {
+        guard let window else { return }
+        window.titlebarSeparatorStyle = .none
+        if let tb = window.standardWindowButton(.closeButton)?.superview {
+            tb.isHidden = true   // у листа своя шапка — системную прячем целиком
+        }
     }
 }
