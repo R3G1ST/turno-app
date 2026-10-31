@@ -43,17 +43,25 @@ struct DayView: View {
     // MARK: Выбор дня
 
     private var datePicker: some View {
-        HStack {
+        HStack(spacing: 8) {
             Button { shiftDay(-1) } label: { Image(systemName: "chevron.left") }.buttonStyle(.borderless)
             DatePicker("", selection: $day, displayedComponents: .date)
                 .datePickerStyle(.compact)
                 .labelsHidden()
             Button { shiftDay(1) } label: { Image(systemName: "chevron.right") }.buttonStyle(.borderless)
+#if os(iOS)
+            Button { day = cal.startOfDay(for: Date()) } label: {
+                Image(systemName: "calendar.badge.clock")
+            }
+            .buttonStyle(.borderless)
+#else
             Button("Сегодня") { day = cal.startOfDay(for: Date()) }
                 .buttonStyle(.borderless)
+#endif
             Spacer()
             let count = store.workedEmployees(date: day).count
             Label("\(count) на смене", systemImage: "person.2.fill")
+                .font(.caption)
                 .foregroundStyle(.secondary)
         }
     }

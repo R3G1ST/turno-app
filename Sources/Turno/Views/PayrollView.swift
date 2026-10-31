@@ -28,6 +28,14 @@ struct PayrollView: View {
         return f.string(from: month).capitalized
     }
     private var rows: [EmployeePay] { store.payroll(forMonth: month) }
+    /// Ширина колонки суммы: на телефоне уже, чтобы влезали заметки и кнопки.
+    private var amountWidth: CGFloat {
+#if os(iOS)
+        66
+#else
+        90
+#endif
+    }
     private var grandTotal: Double { rows.reduce(0) { $0 + $1.total } }
 
     var body: some View {
@@ -58,6 +66,66 @@ struct PayrollView: View {
     }
 
     private var header: some View {
+#if os(iOS)
+        compactHeader
+#else
+        macHeader
+#endif
+    }
+
+    /// Компактная шапка под телефон: месяц отдельной строкой, кнопки — в горизонтальной прокрутке.
+    private var compactHeader: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 4) {
+                Button { shiftMonth(-1) } label: {
+                    Image(systemName: "chevron.left").font(.body.weight(.semibold))
+                }
+                .buttonStyle(.borderless)
+                Text(monthTitle)
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                Button { shiftMonth(1) } label: {
+                    Image(systemName: "chevron.right").font(.body.weight(.semibold))
+                }
+                .buttonStyle(.borderless)
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 16) {
+                    Button { showPremium = true } label: {
+                        Label("Премия", systemImage: "star").font(.subheadline)
+                    }
+                    Button { showFine = true } label: {
+                        Label("Штраф", systemImage: "exclamationmark.octagon").font(.subheadline)
+                    }
+                    Button { showManager = true } label: {
+                        Label("Все начисления", systemImage: "list.bullet.rectangle").font(.subheadline)
+                    }
+                    Button { exportCSV() } label: {
+                        Label("CSV", systemImage: "tablecells").font(.subheadline)
+                    }
+                    Button { exportPDF() } label: {
+                        Label("PDF", systemImage: "doc.richtext").font(.subheadline)
+                    }
+                    Button { printPDF() } label: {
+                        Label("Печать", systemImage: "printer").font(.subheadline)
+                    }
+                }
+                .buttonStyle(.borderless)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial)
+        .sheet(isPresented: $showPremium) {
+            PremiumSheet(month: month).environmentObject(store)
+        }
+        .sheet(isPresented: $showFine) {
+            FineSheet(month: month).environmentObject(store)
+        }
+    }
+
+    private var macHeader: some View {
         HStack {
             Button { shiftMonth(-1) } label: { Image(systemName: "chevron.left") }.buttonStyle(.borderless)
             Text(monthTitle).font(.title3.weight(.semibold)).frame(width: 180)
@@ -174,7 +242,7 @@ struct PayrollView: View {
                         }
                         Text("\(Int(s.total)) ₽")
                             .font(.callout.weight(.semibold).monospacedDigit())
-                            .frame(width: 90, alignment: .trailing)
+                            .frame(width: amountWidth, alignment: .trailing)
                     }
                     .font(.callout)
                 }
@@ -192,7 +260,7 @@ struct PayrollView: View {
                             Text("+\(Int(p.amount)) ₽")
                                 .font(.callout.weight(.semibold).monospacedDigit())
                                 .foregroundStyle(.green)
-                                .frame(width: 90, alignment: .trailing)
+                                .frame(width: amountWidth, alignment: .trailing)
                             Button { editingPremium = p } label: {
                                 Image(systemName: "pencil").font(.caption)
                             }
@@ -221,7 +289,7 @@ struct PayrollView: View {
                             Text("−\(Int(f.amount)) ₽")
                                 .font(.callout.weight(.semibold).monospacedDigit())
                                 .foregroundStyle(.red)
-                                .frame(width: 90, alignment: .trailing)
+                                .frame(width: amountWidth, alignment: .trailing)
                             Button { if let parent = parentFine(f) { editingFine = parent } } label: {
                                 Image(systemName: "pencil").font(.caption)
                             }

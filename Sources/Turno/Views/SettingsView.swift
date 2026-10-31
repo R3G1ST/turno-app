@@ -226,7 +226,11 @@ struct UpdateSheet: View {
             }
         }
         .padding(28)
+#if os(macOS)
         .frame(width: 420)
+#else
+        .frame(maxWidth: .infinity)
+#endif
     }
 }
 

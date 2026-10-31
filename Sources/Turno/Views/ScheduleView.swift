@@ -39,7 +39,16 @@ struct ScheduleView: View {
         return [Date?](repeating: nil, count: pad) + days
     }
 
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 7)
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 7)
+
+    /// Высота ячейки: на телефоне компактнее, чтобы месяц целиком помещался.
+    private var cellHeight: CGFloat {
+#if os(iOS)
+        86
+#else
+        110
+#endif
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -61,12 +70,12 @@ struct ScheduleView: View {
                                 }
                                 .onTapGesture { editedDay = day }
                         } else {
-                            Color.clear.frame(height: 110)
+                            Color.clear.frame(height: cellHeight)
                         }
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 10)
+                .padding(.horizontal, 10)
+                .padding(.top, 8)
                 .padding(.bottom, 20)
             }
         }
@@ -110,6 +119,58 @@ struct ScheduleView: View {
     // MARK: Шапка
 
     private var header: some View {
+#if os(iOS)
+        compactHeader
+#else
+        macHeader
+#endif
+    }
+
+    /// Компактная шапка под узкий экран телефона: две строки, иконки без подписей.
+    private var compactHeader: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 4) {
+                Button { shiftMonth(-1) } label: {
+                    Image(systemName: "chevron.left").font(.body.weight(.semibold))
+                }
+                Text(monthTitle)
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                Button { shiftMonth(1) } label: {
+                    Image(systemName: "chevron.right").font(.body.weight(.semibold))
+                }
+            }
+            .buttonStyle(.borderless)
+
+            HStack(spacing: 18) {
+                Button { month = cal.startOfDay(for: Date()) } label: {
+                    Text("Сегодня").font(.subheadline.weight(.medium))
+                }
+                .buttonStyle(.borderless)
+
+                Spacer()
+
+                Button {
+                    copyScheduleAsImage()
+                } label: {
+                    Image(systemName: "photo.on.rectangle")
+                }
+                .buttonStyle(.borderless)
+
+                Button {
+                    showTemplates = true
+                } label: {
+                    Image(systemName: "wand.and.stars")
+                }
+                .buttonStyle(.borderless)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial)
+    }
+
+    private var macHeader: some View {
         HStack(spacing: 12) {
             Button { shiftMonth(-1) } label: { Image(systemName: "chevron.left") }
                 .buttonStyle(.borderless)
@@ -233,6 +294,15 @@ struct DayCell: View {
 
     private var revenue: DayRevenue { store.revenue(date: day) }
 
+    /// Высота ячейки — компактнее на телефоне.
+    private var cellHeight: CGFloat {
+#if os(iOS)
+        86
+#else
+        110
+#endif
+    }
+
     var body: some View {
         ZStack(alignment: .topLeading) {
             stripes
@@ -260,6 +330,8 @@ struct DayCell: View {
                     Text("Выходной")
                         .font(.system(size: 10))
                         .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
                     Spacer(minLength: 0)
                 } else {
                     chips
@@ -268,7 +340,7 @@ struct DayCell: View {
             }
             .padding(7)
         }
-        .frame(height: 110, alignment: .topLeading)
+        .frame(height: cellHeight, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 12)
                 .fill(cellBackground)
@@ -410,7 +482,11 @@ struct DayEditor: View {
             }
             .padding(12)
         }
+#if os(macOS)
         .frame(width: 340)
+#else
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+#endif
     }
 }
 

@@ -146,7 +146,11 @@ struct EmployeeSheet: View {
             }
         }
         .padding(22)
+#if os(macOS)
         .frame(width: 380)
+#else
+        .frame(maxWidth: .infinity)
+#endif
         .onAppear {
             if let e = employee {
                 name = e.name; role = e.role; rate = String(Int(e.defaultShiftRate)); active = e.active
