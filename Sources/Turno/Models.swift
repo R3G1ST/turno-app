@@ -101,6 +101,17 @@ struct Employee: Identifiable, Codable, Equatable, Hashable {
         self.colorHex = colorHex
     }
 
+    /// Tolerant decoding: поля отсутствуют в старых файлах → дефолты.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id      = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name    = try c.decodeIfPresent(String.self, forKey: .name) ?? "Сотрудник"
+        role    = try c.decodeIfPresent(Role.self, forKey: .role) ?? .hookah
+        defaultShiftRate = try c.decodeIfPresent(Double.self, forKey: .defaultShiftRate) ?? 2300
+        active  = try c.decodeIfPresent(Bool.self, forKey: .active) ?? true
+        colorHex = try c.decodeIfPresent(UInt32.self, forKey: .colorHex)
+    }
+
     /// Цвет сотрудника: собственный или цвет роли.
     var color: Color {
         colorHex.map { Palette.color($0) } ?? role.color

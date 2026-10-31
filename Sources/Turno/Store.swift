@@ -15,6 +15,35 @@ final class Store: ObservableObject {
         var premiums: [Premium] = []
         var checkUpdatesOnLaunch: Bool = true
         var configVersion: Int?                    // версия конфигурации (миграции)
+
+        /// Тolerant decoding: каждое поле читается через decodeIfPresent с дефолтом,
+        /// поэтому файл любой прошлой/будущей версии читается без ошибки —
+        /// недостающие поля просто берут значения по умолчанию.
+        init(employees: [Employee] = [], shifts: [String: Shift] = [:],
+             revenues: [String: DayRevenue] = [:], thresholds: [BonusThreshold] = [],
+             fines: [Fine] = [], premiums: [Premium] = [],
+             checkUpdatesOnLaunch: Bool = true, configVersion: Int? = nil) {
+            self.employees = employees
+            self.shifts = shifts
+            self.revenues = revenues
+            self.thresholds = thresholds
+            self.fines = fines
+            self.premiums = premiums
+            self.checkUpdatesOnLaunch = checkUpdatesOnLaunch
+            self.configVersion = configVersion
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            employees   = try c.decodeIfPresent([Employee].self, forKey: .employees) ?? []
+            shifts      = try c.decodeIfPresent([String: Shift].self, forKey: .shifts) ?? [:]
+            revenues    = try c.decodeIfPresent([String: DayRevenue].self, forKey: .revenues) ?? [:]
+            thresholds  = try c.decodeIfPresent([BonusThreshold].self, forKey: .thresholds) ?? []
+            fines       = try c.decodeIfPresent([Fine].self, forKey: .fines) ?? []
+            premiums    = try c.decodeIfPresent([Premium].self, forKey: .premiums) ?? []
+            checkUpdatesOnLaunch = try c.decodeIfPresent(Bool.self, forKey: .checkUpdatesOnLaunch) ?? true
+            configVersion = try c.decodeIfPresent(Int.self, forKey: .configVersion)
+        }
     }
 
     /// Реальные пороги владельца и базовая ставка.
@@ -25,6 +54,10 @@ final class Store: ObservableObject {
     ]
 
     @Published var data = AppData()
+    /// Удалось ли загрузить реальные данные (чтобы не перезаписать файл демо-данными).
+    private var hasLoadedRealData = false
+    /// Файл существует, но не читается и бэкапов нет → не трогаем диск.
+    private(set) var loadFailed = false
 
     static let appName = "Turno"
     static var supportDir: URL {
@@ -38,19 +71,66 @@ final class Store: ObservableObject {
 
     init() {
         load()
-        seedIfEmpty()
+        // Демо-данные поднимаем только если файла нет вовсе (не когда файл был, но не прочитался).
+        if !hasLoadedRealData && !loadFailed {
+            seedIfEmpty()
+        }
     }
 
     // MARK: - Загрузка / сохранение
 
     func load() {
-        guard let raw = try? Data(contentsOf: Self.dataFile) else { return }
+        guard let raw = try? Data(contentsOf: Self.dataFile), !raw.isEmpty else { return }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .deferredToDate
         if let decoded = try? decoder.decode(AppData.self, from: raw) {
             data = decoded
+            hasLoadedRealData = true
             migrate()
+            return
         }
+        // Файл не читается → пробуем восстановить из самой свежей резервной копии.
+        if let recovered = loadFromBackup() {
+            data = recovered
+            hasLoadedRealData = true
+            migrate()       // migrate() сохранит восстановленные данные обратно в основной файл
+            return
+        }
+        // Ни файл, ни бэкапы не читаемы: НЕ поднимаем демо и НЕ перезаписываем диск.
+        // Страховка: сохраняем сломанный файл отдельно, чтобы не потерять его.
+        preserveCorruptFile()
+        loadFailed = true
+    }
+
+    /// Копирует нечитаемый основной файл в <имя>.corrupt-<время>, чтобы данные остались для ручного восстановления.
+    private func preserveCorruptFile() {
+        let fm = FileManager.default
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        let dst = Self.supportDir.appendingPathComponent("turno_corrupt_\(f.string(from: Date())).json")
+        try? fm.copyItem(at: Self.dataFile, to: dst)
+    }
+
+    /// Читает самый свежий бэкап, который декодируется. nil — если подходящих нет.
+    private func loadFromBackup() -> AppData? {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(at: Self.backupsDir,
+                                                      includingPropertiesForKeys: [.creationDateKey])
+        else { return nil }
+        let sorted = files.filter { $0.pathExtension == "json" }.sorted { a, b in
+            let da = (try? a.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
+            let db = (try? b.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
+            return da > db
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .deferredToDate
+        for url in sorted {
+            if let raw = try? Data(contentsOf: url),
+               let decoded = try? decoder.decode(AppData.self, from: raw) {
+                return decoded
+            }
+        }
+        return nil
     }
 
     /// Первая версия конфигурации: базовая ставка 2300 и пороги владельца.
