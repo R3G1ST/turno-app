@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 // MARK: - Главный экран: месячный календарь
 
@@ -7,6 +8,7 @@ struct ScheduleView: View {
     @State private var month: Date = Calendar.current.startOfDay(for: Date())
     @State private var editedDay: Date?
     @State private var showTemplates = false
+    @State private var copiedFlash = false
 
     private var cal: Calendar {
         var c = Calendar.current
@@ -67,6 +69,18 @@ struct ScheduleView: View {
             TemplatesSheet(month: month)
                 .environmentObject(store)
         }
+        .overlay(alignment: .top) {
+            if copiedFlash {
+                Label("График скопирован как фото", systemImage: "checkmark.circle.fill")
+                    .font(.callout.weight(.semibold))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(.regularMaterial, in: Capsule())
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .padding(.top, 8)
+            }
+        }
+        .animation(.snappy, value: copiedFlash)
     }
 
     // MARK: Шапка дней недели
@@ -105,6 +119,12 @@ struct ScheduleView: View {
             Spacer()
 
             Button {
+                copyScheduleAsImage()
+            } label: { Label("Скопировать как фото", systemImage: "photo.on.rectangle") }
+                .buttonStyle(.borderless)
+                .help("Скопировать график месяца в буфер обмена как изображение")
+
+            Button {
                 showTemplates = true
             } label: { Label("Шаблоны заполнения", systemImage: "wand.and.stars") }
                 .buttonStyle(.borderless)
@@ -134,6 +154,33 @@ struct ScheduleView: View {
         if let d = cal.date(byAdding: .month, value: delta, to: month) { month = d }
     }
 
+    // MARK: Копирование графика как изображения
+
+    private func copyScheduleAsImage() {
+        // Рендерим календарь в картинку (always-light, плотные фоны → подходит для мессенджеров).
+        let canvas = ScheduleImageCanvas(month: month)
+            .environmentObject(store)
+            .environment(\.colorScheme, .light)
+        let renderer = ImageRenderer(content: canvas)
+        renderer.scale = 2.0 // чёткое retina-изображение
+        guard let nsImage = renderer.nsImage else { return }
+
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        // TIFF (для вставки в多数 нативных приложений) + PNG (универсально).
+        pasteboard.writeObjects([nsImage])
+        if let tiff = nsImage.tiffRepresentation,
+           let rep = NSBitmapImageRep(data: tiff),
+           let png = rep.representation(using: .png, properties: [:]) {
+            pasteboard.setData(png, forType: .png)
+        }
+
+        withAnimation(.snappy) { copiedFlash = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+            withAnimation(.snappy) { copiedFlash = false }
+        }
+    }
+
     @ViewBuilder
     private func dayContextMenu(_ day: Date) -> some View {
         Button("Открыть день") { editedDay = day }
@@ -154,6 +201,8 @@ struct DayCell: View {
     @EnvironmentObject var store: Store
     @Binding var month: Date
     let day: Date
+    /// true — при рендере в изображение: непрозрачный фон вместо материала.
+    var forExport: Bool = false
 
     private var cal: Calendar { Calendar.current }
 
@@ -212,9 +261,7 @@ struct DayCell: View {
         .frame(height: 110, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 12)
-                .fill(isToday
-                      ? AnyShapeStyle(Color.accentColor.opacity(0.10))
-                      : AnyShapeStyle(.ultraThinMaterial))
+                .fill(cellBackground)
         )
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(
@@ -227,6 +274,12 @@ struct DayCell: View {
     }
 
     // MARK: Цветные полосы по сотрудникам
+
+    /// Фон ячейки: для картинки — плотный белый, в интерфейсе — полупрозрачный материал.
+    private var cellBackground: AnyShapeStyle {
+        if isToday { return AnyShapeStyle(Color.accentColor.opacity(0.10)) }
+        return AnyShapeStyle(forExport ? AnyShapeStyle(Color.white) : AnyShapeStyle(.ultraThinMaterial))
+    }
 
     /// Максимум полос на ячейку — больше 6 человек в день не бывает на практике.
     private var stripeWorkers: [(emp: Employee, shift: Shift)] {
@@ -459,5 +512,80 @@ struct TemplatesSheet: View {
             store.setShift(Shift(kind: kind), employee: emp, date: d)
         }
         store.saveNow()
+    }
+}
+
+// MARK: - Холст календаря для экспорта в изображение
+
+/// Воспроизводит сетку месяца с заголовком — используется ImageRenderer для «фото графика».
+/// Фоны плотные (белые клетки на светлом фоне) и цветScheme принудительно light.
+struct ScheduleImageCanvas: View {
+    @EnvironmentObject var store: Store
+    let month: Date
+
+    private var cal: Calendar {
+        var c = Calendar.current
+        c.firstWeekday = 2
+        return c
+    }
+
+    private var monthTitle: String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "ru_RU")
+        f.dateFormat = "LLLL yyyy"
+        return f.string(from: month).capitalized
+    }
+
+    private var calendarDays: [Date?] {
+        guard let interval = cal.dateInterval(of: .month, for: month) else { return [] }
+        let count = Int(interval.duration / 86400)
+        let days = (0..<count).compactMap { cal.date(byAdding: .day, value: $0, to: interval.start) }
+        guard let first = days.first else { return days }
+        let leading = cal.component(.weekday, from: first) - cal.firstWeekday
+        let pad = (leading + 7) % 7
+        return [Date?](repeating: nil, count: pad) + days
+    }
+
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 7)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("График смен — \(monthTitle)")
+                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                Spacer()
+                Text("Turno")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+
+            weekdayHeader
+
+            LazyVGrid(columns: columns, spacing: 8) {
+                ForEach(Array(calendarDays.enumerated()), id: \.offset) { _, day in
+                    if let day {
+                        DayCell(month: .constant(month), day: day, forExport: true)
+                    } else {
+                        Color.clear.frame(height: 110)
+                    }
+                }
+            }
+        }
+        .padding(24)
+        .frame(width: 940, alignment: .leading)
+        .background(Color(red: 0.95, green: 0.95, blue: 0.96))
+    }
+
+    private var weekdayHeader: some View {
+        let symbols = cal.veryShortWeekdaySymbols
+        let ordered = Array(symbols[1...]) + [symbols[0]]
+        return HStack(spacing: 8) {
+            ForEach(Array(ordered.enumerated()), id: \.offset) { i, s in
+                Text(s)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(i >= 5 ? Color.red.opacity(0.7) : Color.secondary)
+                    .frame(maxWidth: .infinity)
+            }
+        }
     }
 }
