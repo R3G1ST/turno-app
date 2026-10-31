@@ -204,6 +204,63 @@ enum FillPattern: String, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - Штраф
+
+struct Fine: Identifiable, Codable, Equatable, Hashable {
+    var id: UUID
+    var employeeID: UUID
+    /// Общая сумма штрафа (₽).
+    var totalAmount: Double
+    /// Причина (например, «опоздание»).
+    var note: String
+    /// Месяц начала удержания, "yyyy-MM".
+    var startMonth: String
+    /// На сколько месяцев разбит (1 = удержать целиком в месяце старта).
+    var monthsCount: Int
+    var createdAt: Date
+
+    init(id: UUID = UUID(), employeeID: UUID, totalAmount: Double, note: String,
+         startMonth: String, monthsCount: Int, createdAt: Date = Date()) {
+        self.id = id
+        self.employeeID = employeeID
+        self.totalAmount = totalAmount
+        self.note = note
+        self.startMonth = startMonth
+        self.monthsCount = max(1, monthsCount)
+        self.createdAt = createdAt
+    }
+}
+
+/// Часть штрафа, удержанная в конкретном месяце.
+struct FineSlice: Identifiable {
+    let id: String      // "fineID|yyyy-MM" — уникален для каждого месяца
+    let note: String
+    let amount: Double
+}
+
+// MARK: - Премия
+
+struct Premium: Identifiable, Codable, Equatable, Hashable {
+    var id: UUID
+    var employeeID: UUID
+    /// Сумма премии (₽).
+    var amount: Double
+    /// День начисления.
+    var date: Date
+    /// За что (например, «хорошие отзывы гостей»).
+    var note: String
+    var createdAt: Date
+
+    init(id: UUID = UUID(), employeeID: UUID, amount: Double, date: Date, note: String, createdAt: Date = Date()) {
+        self.id = id
+        self.employeeID = employeeID
+        self.amount = amount
+        self.date = date
+        self.note = note
+        self.createdAt = createdAt
+    }
+}
+
 // MARK: - Результат расчёта зарплаты за смену
 
 struct ShiftPay: Identifiable {
@@ -219,9 +276,13 @@ struct ShiftPay: Identifiable {
 struct EmployeePay: Identifiable {
     let employee: Employee
     let shifts: [ShiftPay]
+    let fines: [FineSlice]
+    let premiums: [Premium]
     var baseTotal: Double { shifts.reduce(0) { $0 + $1.base } }
     var bonusTotal: Double { shifts.reduce(0) { $0 + $1.bonusTotal } }
-    var total: Double { shifts.reduce(0) { $0 + $1.total } }
+    var fineTotal: Double { fines.reduce(0) { $0 + $1.amount } }
+    var premiumTotal: Double { premiums.reduce(0) { $0 + $1.amount } }
+    var total: Double { baseTotal + bonusTotal + premiumTotal - fineTotal }
     var workDays: Int { shifts.count }
     var id: UUID { employee.id }
 }

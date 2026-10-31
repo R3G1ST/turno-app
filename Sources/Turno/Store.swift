@@ -11,6 +11,8 @@ final class Store: ObservableObject {
         var shifts: [String: Shift] = [:]          // "employeeID|yyyy-MM-dd" → Shift
         var revenues: [String: DayRevenue] = [:]   // "yyyy-MM-dd" → DayRevenue
         var thresholds: [BonusThreshold] = []
+        var fines: [Fine] = []
+        var premiums: [Premium] = []
         var checkUpdatesOnLaunch: Bool = true
         var configVersion: Int?                    // версия конфигурации (миграции)
     }
@@ -201,8 +203,55 @@ final class Store: ObservableObject {
                 }
                 d = cal.date(byAdding: .day, value: 1, to: d)!
             }
-            return EmployeePay(employee: emp, shifts: pays)
+            // Штрафы: срез за каждый месяц, попавший в период
+            let slices = fineSlices(employee: emp.id, from: from, to: to)
+            // Премии: начисленные внутри периода
+            let prems = data.premiums.filter { $0.employeeID == emp.id && $0.date >= from && $0.date <= to }
+            return EmployeePay(employee: emp, shifts: pays, fines: slices, premiums: prems)
         }
+    }
+
+    // MARK: - Штрафы: срезы по месяцам
+
+    /// Сколько удержать с сотрудника в каждом месяце периода.
+    /// Штраф делится равномерно на monthsCount месяцев, начиная со startMonth;
+    /// остаток копеек приходится на последний месяц, чтобы сумма сошлась.
+    func fineSlices(employee: UUID, from: Date, to: Date) -> [FineSlice] {
+        let cal = Calendar.current
+        var result: [FineSlice] = []
+        for fine in data.fines where fine.employeeID == employee {
+            let perMonth = (fine.totalAmount / Double(fine.monthsCount)).rounded()
+            guard let start = monthDate(fine.startMonth) else { continue }
+            for k in 0..<fine.monthsCount {
+                guard let m = cal.date(byAdding: .month, value: k, to: start) else { continue }
+                guard m >= cal.date(from: cal.dateComponents([.year, .month], from: from))!,
+                      m <= cal.date(from: cal.dateComponents([.year, .month], from: to))!
+                else { continue }
+                // последний месяц получает остаток
+                let amount = (k == fine.monthsCount - 1)
+                    ? fine.totalAmount - perMonth * Double(fine.monthsCount - 1)
+                    : perMonth
+                guard amount != 0 else { continue }
+                let key = "\(fine.id.uuidString)|\(monthKey(m))"
+                result.append(FineSlice(id: key, note: fine.note, amount: amount))
+            }
+        }
+        return result
+    }
+
+    /// "yyyy-MM" → 1-е число месяца.
+    func monthDate(_ key: String) -> Date? {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM"
+        return f.date(from: key)
+    }
+
+    func monthKey(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM"
+        return f.string(from: date)
     }
 
     func payroll(forMonth date: Date) -> [EmployeePay] {

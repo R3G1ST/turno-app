@@ -8,6 +8,8 @@ struct PayrollView: View {
     @EnvironmentObject var store: Store
     @State private var month: Date = Calendar.current.startOfDay(for: Date())
     @State private var expanded: UUID?
+    @State private var showPremium = false
+    @State private var showFine = false
 
     private var cal: Calendar { Calendar.current }
     private var monthTitle: String {
@@ -34,6 +36,12 @@ struct PayrollView: View {
             Button { shiftMonth(1) } label: { Image(systemName: "chevron.right") }.buttonStyle(.borderless)
             Spacer()
             Button {
+                showPremium = true
+            } label: { Label("Премия", systemImage: "star") }
+            Button {
+                showFine = true
+            } label: { Label("Штраф", systemImage: "exclamationmark.octagon") }
+            Button {
                 exportCSV()
             } label: { Label("CSV", systemImage: "tablecells") }
             Button {
@@ -47,6 +55,12 @@ struct PayrollView: View {
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
         .background(.ultraThinMaterial)
+        .sheet(isPresented: $showPremium) {
+            PremiumSheet(month: month).environmentObject(store)
+        }
+        .sheet(isPresented: $showFine) {
+            FineSheet(month: month).environmentObject(store)
+        }
     }
 
     private func shiftMonth(_ delta: Int) {
@@ -97,13 +111,16 @@ struct PayrollView: View {
                         .foregroundStyle(pay.employee.color)
                     VStack(alignment: .leading) {
                         Text(pay.employee.name).fontWeight(.medium)
-                        Text("\(pay.workDays) смен · база \(Int(pay.baseTotal)) · надбавки \(Int(pay.bonusTotal))")
+                        Text("\(pay.workDays) смен · база \(Int(pay.baseTotal)) · надбавки \(Int(pay.bonusTotal))"
+                             + (pay.premiumTotal > 0 ? " · премии +\(Int(pay.premiumTotal))" : "")
+                             + (pay.fineTotal > 0 ? " · штрафы −\(Int(pay.fineTotal))" : ""))
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
                     Text("\(Int(pay.total)) ₽")
                         .font(.system(.title3, design: .rounded).weight(.semibold))
                         .monospacedDigit()
+                        .foregroundStyle(pay.total < 0 ? .red : .primary)
                     Image(systemName: isOpen ? "chevron.up" : "chevron.down")
                         .font(.caption).foregroundStyle(.secondary)
                 }
@@ -130,6 +147,42 @@ struct PayrollView: View {
                     }
                     .font(.callout)
                 }
+
+                if !pay.premiums.isEmpty {
+                    Divider()
+                    ForEach(pay.premiums) { p in
+                        HStack {
+                            Image(systemName: "star.fill")
+                                .font(.caption)
+                                .foregroundStyle(.yellow)
+                            Text(p.note).font(.callout).lineLimit(1)
+                            Spacer()
+                            Text(dayStr(p.date)).font(.caption).foregroundStyle(.secondary)
+                            Text("+\(Int(p.amount)) ₽")
+                                .font(.callout.weight(.semibold).monospacedDigit())
+                                .foregroundStyle(.green)
+                                .frame(width: 90, alignment: .trailing)
+                        }
+                    }
+                }
+
+                if !pay.fines.isEmpty {
+                    Divider()
+                    ForEach(pay.fines) { f in
+                        HStack {
+                            Image(systemName: "exclamationmark.octagon.fill")
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                            Text(f.note).font(.callout).lineLimit(1)
+                            Spacer()
+                            Text("удержание").font(.caption).foregroundStyle(.secondary)
+                            Text("−\(Int(f.amount)) ₽")
+                                .font(.callout.weight(.semibold).monospacedDigit())
+                                .foregroundStyle(.red)
+                                .frame(width: 90, alignment: .trailing)
+                        }
+                    }
+                }
             }
         }
         .padding(16)
@@ -146,11 +199,11 @@ struct PayrollView: View {
     // MARK: - Экспорт CSV
 
     private func exportCSV() {
-        var csv = "Сотрудник;Роль;Смен;База;Надбавки;Итого\n"
+        var csv = "Сотрудник;Роль;Смен;База;Надбавки;Премии;Штрафы;Итого\n"
         for pay in rows {
-            csv += "\(pay.employee.name);\(pay.employee.role.rawValue);\(pay.workDays);\(Int(pay.baseTotal));\(Int(pay.bonusTotal));\(Int(pay.total))\n"
+            csv += "\(pay.employee.name);\(pay.employee.role.rawValue);\(pay.workDays);\(Int(pay.baseTotal));\(Int(pay.bonusTotal));\(Int(pay.premiumTotal));\(Int(pay.fineTotal));\(Int(pay.total))\n"
         }
-        csv += "ИТОГО;;;;;\(Int(grandTotal))\n"
+        csv += "ИТОГО;;;;;;\(Int(grandTotal))\n"
 
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "Зарплата_\(Keys.day(month)).csv"
@@ -199,8 +252,8 @@ struct PayrollView: View {
         draw(monthTitle, headAttrs, x: 40)
         y -= 28
 
-        let cols: [CGFloat] = [40, 220, 300, 370, 440, 505]
-        let headers = ["Сотрудник", "Роль", "Смен", "База", "Надбавки", "Итого"]
+        let cols: [CGFloat] = [40, 195, 275, 335, 400, 460, 510, 555]
+        let headers = ["Сотрудник", "Роль", "Смен", "База", "Надбавки", "Премии", "Штрафы", "Итого"]
         for (i, h) in headers.enumerated() { draw(h, headAttrs, x: cols[i]) }
         y -= 20
         ctx.setStrokeColor(NSColor.lightGray.cgColor)
@@ -211,7 +264,8 @@ struct PayrollView: View {
 
         for pay in rows {
             let vals = [pay.employee.name, pay.employee.role.rawValue, "\(pay.workDays)",
-                        "\(Int(pay.baseTotal)) ₽", "+\(Int(pay.bonusTotal)) ₽", "\(Int(pay.total)) ₽"]
+                        "\(Int(pay.baseTotal)) ₽", "+\(Int(pay.bonusTotal)) ₽",
+                        "+\(Int(pay.premiumTotal)) ₽", "−\(Int(pay.fineTotal)) ₽", "\(Int(pay.total)) ₽"]
             for (i, v) in vals.enumerated() { draw(v, rowAttrs, x: cols[i]) }
             y -= 20
         }
