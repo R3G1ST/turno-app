@@ -46,7 +46,7 @@ struct EmployeesView: View {
                 .font(.title3)
                 .foregroundStyle(.white)
                 .frame(width: 42, height: 42)
-                .background(emp.role.color.gradient, in: RoundedRectangle(cornerRadius: 12))
+                .background(emp.color.gradient, in: RoundedRectangle(cornerRadius: 12))
             VStack(alignment: .leading) {
                 Text(emp.name).fontWeight(.medium)
                 Text(emp.role.rawValue)
@@ -82,6 +82,7 @@ struct EmployeeSheet: View {
     @State private var role: Role = .hookah
     @State private var rate = "2300"
     @State private var active = true
+    @State private var colorHex: UInt32 = Palette.colors[0].hex
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -102,6 +103,28 @@ struct EmployeeSheet: View {
                     .textFieldStyle(.roundedBorder)
                     .multilineTextAlignment(.trailing)
                 Text("₽").foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Цвет сотрудника")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                LazyVGrid(columns: Array(repeating: GridItem(.fixed(28), spacing: 8), count: 6), spacing: 8) {
+                    ForEach(Palette.colors, id: \.hex) { c in
+                        Button {
+                            colorHex = c.hex
+                        } label: {
+                            Circle()
+                                .fill(Palette.color(c.hex))
+                                .frame(width: 26, height: 26)
+                                .overlay(
+                                    Circle().strokeBorder(Color.primary, lineWidth: colorHex == c.hex ? 2.5 : 0)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .help(c.name)
+                    }
+                }
             }
 
             Toggle("Активен", isOn: $active)
@@ -127,6 +150,7 @@ struct EmployeeSheet: View {
         .onAppear {
             if let e = employee {
                 name = e.name; role = e.role; rate = String(Int(e.defaultShiftRate)); active = e.active
+                colorHex = e.colorHex ?? Palette.colors[0].hex
             }
         }
     }
@@ -138,12 +162,13 @@ struct EmployeeSheet: View {
             e.role = role
             e.defaultShiftRate = r
             e.active = active
+            e.colorHex = colorHex
             if let i = store.data.employees.firstIndex(where: { $0.id == e.id }) {
                 store.data.employees[i] = e
             }
         } else {
             store.data.employees.append(
-                Employee(name: name.trimmingCharacters(in: .whitespaces), role: role, defaultShiftRate: r, active: active)
+                Employee(name: name.trimmingCharacters(in: .whitespaces), role: role, defaultShiftRate: r, active: active, colorHex: colorHex)
             )
         }
         store.saveNow()

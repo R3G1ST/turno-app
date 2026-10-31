@@ -53,13 +53,21 @@ final class Store: ObservableObject {
 
     /// Первая версия конфигурации: базовая ставка 2300 и пороги владельца.
     private func migrate() {
-        guard (data.configVersion ?? 0) < 1 else { return }
-        data.configVersion = 1
-        for i in data.employees.indices {
-            data.employees[i].defaultShiftRate = Self.baseShiftRate
+        if (data.configVersion ?? 0) < 1 {
+            data.configVersion = 1
+            for i in data.employees.indices {
+                data.employees[i].defaultShiftRate = Self.baseShiftRate
+            }
+            data.thresholds = Self.defaultThresholds.map {
+                BonusThreshold(revenueFrom: $0.revenue, amount: $0.bonus)
+            }
         }
-        data.thresholds = Self.defaultThresholds.map {
-            BonusThreshold(revenueFrom: $0.revenue, amount: $0.bonus)
+        // v2: индивидуальные цвета сотрудникам (по порядку из палитры)
+        if (data.configVersion ?? 0) < 2 {
+            data.configVersion = 2
+            for (i, emp) in data.employees.enumerated() where emp.colorHex == nil {
+                data.employees[i].colorHex = Palette.colors[i % Palette.colors.count].hex
+            }
         }
         saveNow()
     }
@@ -109,16 +117,20 @@ final class Store: ObservableObject {
 
     private func seedIfEmpty() {
         guard data.employees.isEmpty, data.thresholds.isEmpty else { return }
-        data.employees = [
-            Employee(name: "Иван Иванов", role: .hookah, defaultShiftRate: Self.baseShiftRate),
-            Employee(name: "Пётр Петров", role: .waiter, defaultShiftRate: Self.baseShiftRate),
-            Employee(name: "Анна Смирнова", role: .admin, defaultShiftRate: Self.baseShiftRate),
-            Employee(name: "Олег Кузнецов", role: .cook, defaultShiftRate: Self.baseShiftRate),
+        let seeds: [(String, Role)] = [
+            ("Иван Иванов", .hookah),
+            ("Пётр Петров", .waiter),
+            ("Анна Смирнова", .admin),
+            ("Олег Кузнецов", .cook),
         ]
+        data.employees = seeds.enumerated().map { i, s in
+            Employee(name: s.0, role: s.1, defaultShiftRate: Self.baseShiftRate,
+                     colorHex: Palette.colors[i % Palette.colors.count].hex)
+        }
         data.thresholds = Self.defaultThresholds.map {
             BonusThreshold(revenueFrom: $0.revenue, amount: $0.bonus)
         }
-        data.configVersion = 1
+        data.configVersion = 2
     }
 
     // MARK: - Доступ к сменам

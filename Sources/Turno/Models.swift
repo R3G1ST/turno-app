@@ -55,6 +55,31 @@ enum ShiftKind: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - Палитра цветов сотрудников
+
+enum Palette {
+    static let colors: [(name: String, hex: UInt32)] = [
+        ("Синий", 0x3478F6),
+        ("Зелёный", 0x28A745),
+        ("Оранжевый", 0xF59129),
+        ("Красный", 0xE0403A),
+        ("Фиолетовый", 0x8E4EC6),
+        ("Бирюзовый", 0x24A1A8),
+        ("Розовый", 0xE85D9E),
+        ("Индиго", 0x5856D6),
+        ("Лайм", 0x7CB342),
+        ("Коричневый", 0x8D6E4F),
+        ("Серый", 0x8E8E93),
+        ("Бордовый", 0xA03033),
+    ]
+
+    static func color(_ hex: UInt32) -> Color {
+        Color(red: Double((hex >> 16) & 0xFF) / 255,
+              green: Double((hex >> 8) & 0xFF) / 255,
+              blue: Double(hex & 0xFF) / 255)
+    }
+}
+
 // MARK: - Сотрудник
 
 struct Employee: Identifiable, Codable, Equatable, Hashable {
@@ -64,13 +89,21 @@ struct Employee: Identifiable, Codable, Equatable, Hashable {
     /// Ставка за смену по умолчанию (₽).
     var defaultShiftRate: Double
     var active: Bool
+    /// Индивидуальный цвет (hex); nil → берётся цвет роли.
+    var colorHex: UInt32?
 
-    init(id: UUID = UUID(), name: String, role: Role, defaultShiftRate: Double, active: Bool = true) {
+    init(id: UUID = UUID(), name: String, role: Role, defaultShiftRate: Double, active: Bool = true, colorHex: UInt32? = nil) {
         self.id = id
         self.name = name
         self.role = role
         self.defaultShiftRate = defaultShiftRate
         self.active = active
+        self.colorHex = colorHex
+    }
+
+    /// Цвет сотрудника: собственный или цвет роли.
+    var color: Color {
+        colorHex.map { Palette.color($0) } ?? role.color
     }
 }
 

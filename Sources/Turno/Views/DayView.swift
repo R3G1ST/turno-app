@@ -186,7 +186,7 @@ struct DayView: View {
                 ForEach(workers) { emp in
                     let shift = store.resolvedShift(employee: emp.id, date: day)
                     HStack {
-                        Image(systemName: emp.role.icon).foregroundStyle(emp.role.color)
+                        Image(systemName: emp.role.icon).foregroundStyle(emp.color)
                         Text(emp.name).fontWeight(.medium)
                         Spacer()
                         Text(shift.kind.rawValue)

@@ -238,7 +238,7 @@ struct DayCell: View {
         if !workers.isEmpty {
             HStack(spacing: 0) {
                 ForEach(stripeWorkers, id: \.emp.id) { w in
-                    w.emp.role.color.opacity(isToday ? 0.45 : 0.28)
+                    w.emp.color.opacity(isToday ? 0.45 : 0.28)
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -251,7 +251,7 @@ struct DayCell: View {
                                  ? Color.accentColor
                                  : (isWeekend ? Color.red.opacity(0.25) : Color.gray.opacity(0.15)))
         }
-        let colors = stripeWorkers.map { $0.emp.role.color }
+        let colors = stripeWorkers.map { $0.emp.color }
         if colors.count == 1 {
             return AnyShapeStyle(colors[0])
         }
@@ -273,7 +273,7 @@ struct DayCell: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
-                .background(Capsule().fill(w.emp.role.color.gradient))
+                .background(Capsule().fill(w.emp.color.gradient))
             }
             if workers.count > 3 {
                 Text("+\(workers.count - 3) ещё…")
@@ -361,7 +361,7 @@ struct EmployeeDayRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Circle().fill(employee.role.color).frame(width: 8, height: 8)
+            Circle().fill(employee.color).frame(width: 8, height: 8)
 
             Toggle(isOn: Binding(
                 get: { isWork },
@@ -387,7 +387,7 @@ struct EmployeeDayRow: View {
         .padding(.horizontal, 8)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(isWork ? employee.role.color.opacity(0.08) : .clear)
+                .fill(isWork ? employee.color.opacity(0.08) : .clear)
         )
     }
 }

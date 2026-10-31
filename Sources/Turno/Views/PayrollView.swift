@@ -94,7 +94,7 @@ struct PayrollView: View {
             } label: {
                 HStack {
                     Image(systemName: pay.employee.role.icon)
-                        .foregroundStyle(pay.employee.role.color)
+                        .foregroundStyle(pay.employee.color)
                     VStack(alignment: .leading) {
                         Text(pay.employee.name).fontWeight(.medium)
                         Text("\(pay.workDays) смен · база \(Int(pay.baseTotal)) · надбавки \(Int(pay.bonusTotal))")
