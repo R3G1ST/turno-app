@@ -114,19 +114,13 @@ final class Updater: ObservableObject {
     }
 
     private func download(_ url: URL) async throws -> URL {
-        let (bytes, response) = try await URLSession.shared.bytes(from: url)
-        let expected = response.expectedContentLength
-        var received = 0
-        let tmp = FileManager.default.temporaryDirectory
+        let (tmp, _) = try await URLSession.shared.download(from: url)
+        let dest = FileManager.default.temporaryDirectory
             .appendingPathComponent("Turno-update-\(Int(Date().timeIntervalSince1970)).dmg")
-        let out = try FileHandle(forWritingTo: tmp)
-        defer { try? out.close() }
-        for try await byte in bytes {
-            try out.write(contentsOf: Data([byte]))
-            received += 1
-            if expected > 0 { progress = Double(received) / Double(expected) * 0.7 }
-        }
-        return tmp
+        try? FileManager.default.removeItem(at: dest)
+        try FileManager.default.moveItem(at: tmp, to: dest)
+        progress = 0.75
+        return dest
     }
 
     private func mount(_ dmg: URL) throws -> URL {
