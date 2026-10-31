@@ -340,4 +340,59 @@ final class Store: ObservableObject {
         let end = cal.date(byAdding: DateComponents(month: 1, day: -1), to: start)!
         return payroll(from: start, to: end)
     }
+
+    // MARK: - Управление премиями
+
+    func premium(id: UUID) -> Premium? {
+        data.premiums.first { $0.id == id }
+    }
+
+    func upsertPremium(_ p: Premium) {
+        if let i = data.premiums.firstIndex(where: { $0.id == p.id }) {
+            data.premiums[i] = p
+        } else {
+            data.premiums.append(p)
+        }
+        saveNow()
+    }
+
+    func deletePremium(_ p: Premium) {
+        data.premiums.removeAll { $0.id == p.id }
+        saveNow()
+    }
+
+    // MARK: - Управление штрафами
+
+    func fine(id: UUID) -> Fine? {
+        data.fines.first { $0.id == id }
+    }
+
+    func upsertFine(_ f: Fine) {
+        if let i = data.fines.firstIndex(where: { $0.id == f.id }) {
+            data.fines[i] = f
+        } else {
+            data.fines.append(f)
+        }
+        saveNow()
+    }
+
+    /// Удаляет штраф целиком (по всем месяцам разбивки).
+    func deleteFine(_ f: Fine) {
+        data.fines.removeAll { $0.id == f.id }
+        saveNow()
+    }
+
+    /// Все премии, отсортированные по дате (для окна управления).
+    func allPremiums() -> [Premium] {
+        data.premiums.sorted { $0.date < $1.date }
+    }
+
+    /// Все штрафы, отсортированные по месяцу старта (для окна управления).
+    func allFines() -> [Fine] {
+        data.fines.sorted { $0.startMonth < $1.startMonth }
+    }
+
+    func employeeName(_ id: UUID) -> String {
+        data.employees.first { $0.id == id }?.name ?? "Удалённый сотрудник"
+    }
 }

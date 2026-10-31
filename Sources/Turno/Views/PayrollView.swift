@@ -10,6 +10,10 @@ struct PayrollView: View {
     @State private var expanded: UUID?
     @State private var showPremium = false
     @State private var showFine = false
+    @State private var showManager = false
+    @State private var editingPremium: Premium?
+    @State private var editingFine: Fine?
+    @State private var deleteFineTarget: Fine?
 
     private var cal: Calendar { Calendar.current }
     private var monthTitle: String {
@@ -27,6 +31,25 @@ struct PayrollView: View {
             Divider()
             list
         }
+        .sheet(isPresented: $showManager) {
+            AdjustmentsManager(month: month).environmentObject(store)
+        }
+        .sheet(item: $editingPremium) { p in
+            PremiumSheet(month: month, existing: p).environmentObject(store)
+        }
+        .sheet(item: $editingFine) { f in
+            FineSheet(month: month, existing: f).environmentObject(store)
+        }
+        .confirmationDialog("Удалить штраф «\(deleteFineTarget?.note ?? "")» по всем месяцам?",
+                            isPresented: Binding(get: { deleteFineTarget != nil },
+                                                 set: { if !$0 { deleteFineTarget = nil } }),
+                            titleVisibility: .visible) {
+            Button("Удалить", role: .destructive) {
+                if let f = deleteFineTarget { store.deleteFine(f) }
+                deleteFineTarget = nil
+            }
+            Button("Отмена", role: .cancel) { deleteFineTarget = nil }
+        }
     }
 
     private var header: some View {
@@ -41,6 +64,9 @@ struct PayrollView: View {
             Button {
                 showFine = true
             } label: { Label("Штраф", systemImage: "exclamationmark.octagon") }
+            Button {
+                showManager = true
+            } label: { Label("Все начисления", systemImage: "list.bullet.rectangle") }
             Button {
                 exportCSV()
             } label: { Label("CSV", systemImage: "tablecells") }
@@ -162,6 +188,17 @@ struct PayrollView: View {
                                 .font(.callout.weight(.semibold).monospacedDigit())
                                 .foregroundStyle(.green)
                                 .frame(width: 90, alignment: .trailing)
+                            Button { editingPremium = p } label: {
+                                Image(systemName: "pencil").font(.caption)
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Редактировать премию")
+                            Button { store.deletePremium(p) } label: {
+                                Image(systemName: "trash").font(.caption)
+                            }
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(.red)
+                            .help("Удалить премию")
                         }
                     }
                 }
@@ -180,6 +217,17 @@ struct PayrollView: View {
                                 .font(.callout.weight(.semibold).monospacedDigit())
                                 .foregroundStyle(.red)
                                 .frame(width: 90, alignment: .trailing)
+                            Button { if let parent = parentFine(f) { editingFine = parent } } label: {
+                                Image(systemName: "pencil").font(.caption)
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Редактировать штраф (весь, по всем месяцам)")
+                            Button { if let parent = parentFine(f) { deleteFineTarget = parent } } label: {
+                                Image(systemName: "trash").font(.caption)
+                            }
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(.red)
+                            .help("Удалить штраф (весь, по всем месяцам)")
                         }
                     }
                 }
@@ -194,6 +242,14 @@ struct PayrollView: View {
         f.locale = Locale(identifier: "ru_RU")
         f.dateFormat = "d MMM (EEE)"
         return f.string(from: d)
+    }
+
+    /// Срез штрафа хранит id вида "fineID|yyyy-MM" — по нему находим исходный штраф.
+    private func parentFine(_ slice: FineSlice) -> Fine? {
+        guard let raw = slice.id.split(separator: "|").first,
+              let uuid = UUID(uuidString: String(raw))
+        else { return nil }
+        return store.fine(id: uuid)
     }
 
     // MARK: - Экспорт CSV
