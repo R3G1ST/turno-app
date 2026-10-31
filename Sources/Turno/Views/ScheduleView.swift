@@ -175,50 +175,40 @@ struct DayCell: View {
     private var revenue: DayRevenue { store.revenue(date: day) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text("\(cal.component(.day, from: day))")
-                    .font(.system(size: 14, weight: isToday ? .bold : .medium, design: .rounded))
-                    .foregroundStyle(isToday ? Color.white : (isWeekend ? .red : .primary))
-                    .frame(width: 26, height: 22)
-                    .background(
-                        Circle().fill(isToday ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.clear))
-                    )
-                Spacer()
-                if revenue.total > 0 {
-                    Text("\(Int(revenue.total / 1000))k")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(.green)
-                }
-            }
-
-            if workers.isEmpty {
-                Text("Выходной")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
-                Spacer(minLength: 0)
-            } else {
-                ForEach(workers.prefix(4), id: \.emp.id) { w in
-                    HStack(spacing: 4) {
-                        Circle().fill(w.emp.role.color).frame(width: 6, height: 6)
-                        Text(w.emp.name)
-                            .font(.system(size: 10))
-                            .lineLimit(1)
-                        Spacer(minLength: 2)
-                        Text(w.shift.kind.short)
+        ZStack(alignment: .topLeading) {
+            stripes
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("\(cal.component(.day, from: day))")
+                        .font(.system(size: 14, weight: isToday ? .bold : .medium, design: .rounded))
+                        .foregroundStyle(isToday ? Color.white : (isWeekend && workers.isEmpty ? .red : .primary))
+                        .frame(width: 26, height: 22)
+                        .background(
+                            Circle().fill(isToday ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.clear))
+                        )
+                    Spacer()
+                    if revenue.total > 0 {
+                        Text("\(Int(revenue.total / 1000))k")
                             .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(w.shift.kind.color)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(.black.opacity(0.30)))
                     }
                 }
-                if workers.count > 4 {
-                    Text("+\(workers.count - 4) ещё…")
-                        .font(.system(size: 9))
-                        .foregroundStyle(.secondary)
+
+                if workers.isEmpty {
+                    Text("Выходной")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                    Spacer(minLength: 0)
+                } else {
+                    chips
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
             }
+            .padding(7)
         }
-        .padding(7)
         .frame(height: 110, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 12)
@@ -226,14 +216,71 @@ struct DayCell: View {
                       ? AnyShapeStyle(Color.accentColor.opacity(0.10))
                       : AnyShapeStyle(.ultraThinMaterial))
         )
+        .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(
             RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(isToday ? Color.accentColor : (isWeekend ? Color.red.opacity(0.25) : Color.gray.opacity(0.15)),
-                              lineWidth: isToday ? 1.5 : 1)
+                .strokeBorder(borderGradient, lineWidth: isToday ? 2 : 1.2)
         )
         .contentShape(RoundedRectangle(cornerRadius: 12))
         .opacity(isOtherMonth ? 0.4 : 1)
         .help(helpText())
+    }
+
+    // MARK: Цветные полосы по сотрудникам
+
+    /// Максимум полос на ячейку — больше 6 человек в день не бывает на практике.
+    private var stripeWorkers: [(emp: Employee, shift: Shift)] {
+        Array(workers.prefix(6))
+    }
+
+    @ViewBuilder
+    private var stripes: some View {
+        if !workers.isEmpty {
+            HStack(spacing: 0) {
+                ForEach(stripeWorkers, id: \.emp.id) { w in
+                    w.emp.role.color.opacity(isToday ? 0.45 : 0.28)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+        }
+    }
+
+    private var borderGradient: AnyShapeStyle {
+        if workers.isEmpty {
+            return AnyShapeStyle(isToday
+                                 ? Color.accentColor
+                                 : (isWeekend ? Color.red.opacity(0.25) : Color.gray.opacity(0.15)))
+        }
+        let colors = stripeWorkers.map { $0.emp.role.color }
+        if colors.count == 1 {
+            return AnyShapeStyle(colors[0])
+        }
+        return AnyShapeStyle(LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing))
+    }
+
+    // MARK: Чипы с именами
+
+    private var chips: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            ForEach(workers.prefix(3), id: \.emp.id) { w in
+                HStack(spacing: 3) {
+                    Image(systemName: w.emp.role.icon)
+                        .font(.system(size: 8, weight: .bold))
+                    Text(w.emp.name)
+                        .font(.system(size: 10, weight: .semibold))
+                        .lineLimit(1)
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Capsule().fill(w.emp.role.color.gradient))
+            }
+            if workers.count > 3 {
+                Text("+\(workers.count - 3) ещё…")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 
     private var isWeekend: Bool {
