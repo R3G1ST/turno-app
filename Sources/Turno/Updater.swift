@@ -91,17 +91,21 @@ final class Updater: ObservableObject {
                 try FileManager.default.copyItem(at: appInDmg, to: target)
                 progress = 1
 
-                // Перезапуск новой версии
+                // Перезапуск новой версии: запуск идёт отдельным процессом с задержкой,
+                // чтобы старая копия успела закрыться — иначе macOS не запускает дубликат.
+                let script = "sleep 2; open -n '\(target.path)'"
                 let relaunch = Process()
-                relaunch.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-                relaunch.arguments = ["-n", target.path]
+                relaunch.executableURL = URL(fileURLWithPath: "/bin/sh")
+                relaunch.arguments = ["-c", script]
+                relaunch.standardOutput = FileHandle.nullDevice
+                relaunch.standardError = FileHandle.nullDevice
                 try relaunch.run()
                 // Закрываем старую копию: сначала штатно, затем страховка —
                 // иначе старое окно зависает на «Установка… 100%».
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     NSApp.terminate(nil)
                 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                     exit(0)
                 }
             } catch {
