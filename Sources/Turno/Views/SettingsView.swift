@@ -1,5 +1,7 @@
 import SwiftUI
+#if canImport(AppKit)
 import AppKit
+#endif
 
 // MARK: - Настройки: пороги надбавок, бэкап, обновления
 
@@ -42,7 +44,9 @@ struct SettingsView: View {
             .padding(.horizontal, 18)
             .padding(.bottom, 18)
         }
+        #if os(macOS)
         .frame(width: 640, height: 480)
+        #endif
     }
 
     private var header: some View {
@@ -63,7 +67,17 @@ struct SettingsView: View {
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
-        .background(WindowConfigurator())
+        .background(windowChrome)
+    }
+
+    /// На macOS прячем системный разделитель шапки листа; на iOS ничего не нужно.
+    @ViewBuilder
+    private var windowChrome: some View {
+        #if os(macOS)
+        WindowConfigurator()
+        #else
+        Color.clear
+        #endif
     }
 
     // MARK: Пороги
@@ -133,9 +147,11 @@ struct SettingsView: View {
                 }
             }
 
+            #if os(macOS)
             Button("Открыть папку данных") {
                 NSWorkspace.shared.open(Store.supportDir)
             }
+            #endif
 
             Spacer()
             Text("Последние 10 копий хранятся автоматически в папке Backups.")
@@ -216,6 +232,7 @@ struct UpdateSheet: View {
 
 // MARK: - Уборка системной полоски-разделителя у листа настроек
 
+#if os(macOS)
 /// macOS рисует горизонтальный разделитель под шапкой листа (titlebar separator).
 /// Находим окно листа и отключаем его, а шапку делаем прозрачной.
 struct WindowConfigurator: NSViewRepresentable {
@@ -241,3 +258,4 @@ struct WindowConfigurator: NSViewRepresentable {
         }
     }
 }
+#endif

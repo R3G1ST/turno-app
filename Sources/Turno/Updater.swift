@@ -1,6 +1,8 @@
 import Foundation
-import AppKit
 import SwiftUI
+#if canImport(AppKit)
+import AppKit
+#endif
 
 struct UpdateInfo: Identifiable {
     let id = UUID()
@@ -42,10 +44,12 @@ final class Updater: ObservableObject {
                let assetURL = URL(string: dmg.browser_download_url) {
                 updateInfo = UpdateInfo(version: tagVersion, notes: release.body ?? "", assetURL: assetURL)
             } else if showNoUpdate {
+                #if os(macOS)
                 let a = NSAlert()
                 a.messageText = "Обновлений нет"
                 a.informativeText = "У вас последняя версия Turno (\(Self.currentVersion))."
                 a.runModal()
+                #endif
             }
         } catch {
             if showNoUpdate {
@@ -67,6 +71,7 @@ final class Updater: ObservableObject {
 
     // MARK: - Установка
 
+    #if os(macOS)
     func install(_ info: UpdateInfo) {
         isInstalling = true
         progress = 0
@@ -158,6 +163,12 @@ final class Updater: ObservableObject {
         try? proc.run()
         proc.waitUntilExit()
     }
+    #else
+    // На iOS автообновления из DMG не применяются — приложение обновляется через App Store.
+    func install(_ info: UpdateInfo) {
+        errorMessage = "На iPhone Turno обновляется через App Store."
+    }
+    #endif
 }
 
 // MARK: - Модели GitHub API

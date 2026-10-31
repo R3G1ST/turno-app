@@ -6,6 +6,7 @@ struct TurnoApp: App {
     @StateObject private var updater = Updater()
 
     var body: some Scene {
+        #if os(macOS)
         WindowGroup("Turno — График кальянной") {
             RootView()
                 .environmentObject(store)
@@ -29,6 +30,13 @@ struct TurnoApp: App {
                 .environmentObject(store)
                 .environmentObject(updater)
         }
+        #else
+        WindowGroup {
+            RootView()
+                .environmentObject(store)
+                .environmentObject(updater)
+        }
+        #endif
     }
 }
 
@@ -43,6 +51,7 @@ struct RootView: View {
         case day = "День"
         case payroll = "Зарплата"
         case employees = "Сотрудники"
+        case settings = "Настройки"
         var id: String { rawValue }
         var icon: String {
             switch self {
@@ -50,11 +59,22 @@ struct RootView: View {
             case .day: return "banknote"
             case .payroll: return "dollarsign.circle"
             case .employees: return "person.2"
+            case .settings: return "gearshape"
             }
         }
     }
 
     var body: some View {
+        #if os(macOS)
+        macBody
+        #else
+        iosBody
+        #endif
+    }
+
+    // MARK: macOS — боковая панель
+
+    private var macBody: some View {
         VStack(spacing: 0) {
             sidebar
             Divider()
@@ -74,7 +94,7 @@ struct RootView: View {
 
     private var sidebar: some View {
         HStack(spacing: 4) {
-            ForEach(Tab.allCases) { t in
+            ForEach(Tab.allCases.filter { $0 != .settings }) { t in
                 SidebarButton(icon: t.icon, title: t.rawValue, selected: tab == t) {
                     tab = t
                 }
@@ -100,6 +120,36 @@ struct RootView: View {
         case .day: DayView()
         case .payroll: PayrollView()
         case .employees: EmployeesView()
+        case .settings: EmptyView()
+        }
+    }
+
+    // MARK: iOS — нижние вкладки
+
+    private var iosBody: some View {
+        TabView(selection: $tab) {
+            ScheduleView()
+                .environmentObject(store)
+                .environmentObject(updater)
+                .tabItem { Label("График", systemImage: Tab.schedule.icon) }
+                .tag(Tab.schedule)
+            DayView()
+                .environmentObject(store)
+                .tabItem { Label("Выручка", systemImage: Tab.day.icon) }
+                .tag(Tab.day)
+            PayrollView()
+                .environmentObject(store)
+                .tabItem { Label("Зарплата", systemImage: Tab.payroll.icon) }
+                .tag(Tab.payroll)
+            EmployeesView()
+                .environmentObject(store)
+                .tabItem { Label("Люди", systemImage: Tab.employees.icon) }
+                .tag(Tab.employees)
+            SettingsView()
+                .environmentObject(store)
+                .environmentObject(updater)
+                .tabItem { Label("Настройки", systemImage: Tab.settings.icon) }
+                .tag(Tab.settings)
         }
     }
 }

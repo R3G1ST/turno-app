@@ -1,5 +1,10 @@
 import SwiftUI
+#if canImport(AppKit)
 import AppKit
+#endif
+#if canImport(UIKit)
+import UIKit
+#endif
 
 // MARK: - Главный экран: месячный календарь
 
@@ -163,8 +168,9 @@ struct ScheduleView: View {
             .environment(\.colorScheme, .light)
         let renderer = ImageRenderer(content: canvas)
         renderer.scale = 2.0 // чёткое retina-изображение
-        guard let nsImage = renderer.nsImage else { return }
 
+        #if os(macOS)
+        guard let nsImage = renderer.nsImage else { return }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         // TIFF (для вставки в多数 нативных приложений) + PNG (универсально).
@@ -174,6 +180,10 @@ struct ScheduleView: View {
            let png = rep.representation(using: .png, properties: [:]) {
             pasteboard.setData(png, forType: .png)
         }
+        #else
+        guard let uiImage = renderer.uiImage else { return }
+        UIPasteboard.general.image = uiImage
+        #endif
 
         withAnimation(.snappy) { copiedFlash = true }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
@@ -493,7 +503,11 @@ struct TemplatesSheet: View {
             }
         }
         .padding(22)
+        #if os(macOS)
         .frame(width: 420)
+        #else
+        .frame(maxWidth: .infinity)
+        #endif
     }
 
     private func apply(_ emp: UUID) {

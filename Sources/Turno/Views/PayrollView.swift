@@ -1,6 +1,11 @@
 import SwiftUI
+#if canImport(AppKit)
 import AppKit
 import PDFKit
+#endif
+#if canImport(UIKit)
+import UIKit
+#endif
 
 // MARK: - Зарплата за месяц + экспорт PDF/CSV
 
@@ -261,16 +266,23 @@ struct PayrollView: View {
         }
         csv += "ИТОГО;;;;;;\(Int(grandTotal))\n"
 
+        // BOM для корректного открытия в Excel
+        let bom = Data([0xEF, 0xBB, 0xBF])
+        let data = bom + csv.data(using: .utf8)!
+        let name = "Зарплата_\(Keys.day(month)).csv"
+
+        #if os(macOS)
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "Зарплата_\(Keys.day(month)).csv"
+        panel.nameFieldStringValue = name
         panel.allowedContentTypes = [.commaSeparatedText]
         panel.begin { resp in
             if resp == .OK, let url = panel.url {
-                // BOM для корректного открытия в Excel
-                let bom = Data([0xEF, 0xBB, 0xBF])
-                try? (bom + csv.data(using: .utf8)!).write(to: url)
+                try? data.write(to: url)
             }
         }
+        #else
+        ShareFile.present(data: data, fileName: name)
+        #endif
     }
 
     // MARK: - PDF
@@ -286,16 +298,16 @@ struct PayrollView: View {
         ctx.beginPDFPage(nil)
 
         let titleAttrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 20, weight: .bold),
-            .foregroundColor: NSColor.black,
+            .font: PlatformFont.systemFont(ofSize: 20, weight: .bold),
+            .foregroundColor: PlatformColor.black,
         ]
         let headAttrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 11, weight: .semibold),
-            .foregroundColor: NSColor.gray,
+            .font: PlatformFont.systemFont(ofSize: 11, weight: .semibold),
+            .foregroundColor: PlatformColor.gray,
         ]
         let rowAttrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 11),
-            .foregroundColor: NSColor.black,
+            .font: PlatformFont.systemFont(ofSize: 11),
+            .foregroundColor: PlatformColor.black,
         ]
 
         var y = bounds.height - 60
@@ -312,7 +324,7 @@ struct PayrollView: View {
         let headers = ["Сотрудник", "Роль", "Смен", "База", "Надбавки", "Премии", "Штрафы", "Итого"]
         for (i, h) in headers.enumerated() { draw(h, headAttrs, x: cols[i]) }
         y -= 20
-        ctx.setStrokeColor(NSColor.lightGray.cgColor)
+        ctx.setStrokeColor(PlatformColor.lightGray.cgColor)
         ctx.move(to: CGPoint(x: 40, y: y + 4))
         ctx.addLine(to: CGPoint(x: 555, y: y + 4))
         ctx.strokePath()
@@ -327,7 +339,7 @@ struct PayrollView: View {
         }
 
         y -= 8
-        ctx.setStrokeColor(NSColor.black.cgColor)
+        ctx.setStrokeColor(PlatformColor.black.cgColor)
         ctx.move(to: CGPoint(x: 40, y: y + 6))
         ctx.addLine(to: CGPoint(x: 555, y: y + 6))
         ctx.strokePath()
@@ -341,25 +353,37 @@ struct PayrollView: View {
     }
 
     private func exportPDF() {
+        let data = makePDFData()
+        let name = "Зарплата_\(Keys.day(month)).pdf"
+        #if os(macOS)
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "Зарплата_\(Keys.day(month)).pdf"
+        panel.nameFieldStringValue = name
         panel.allowedContentTypes = [.pdf]
         panel.begin { resp in
             if resp == .OK, let url = panel.url {
-                try? makePDFData().write(to: url)
+                try? data.write(to: url)
             }
         }
+        #else
+        ShareFile.present(data: data, fileName: name)
+        #endif
     }
 
     private func printPDF() {
+        let data = makePDFData()
+        #if os(macOS)
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("turno_payroll_\(Keys.day(month)).pdf")
-        try? makePDFData().write(to: tmp)
+        try? data.write(to: tmp)
         guard let doc = PDFDocument(url: tmp) else { return }
         let view = PDFView(frame: NSRect(x: 0, y: 0, width: 595, height: 842))
         view.document = doc
         let op = NSPrintOperation(view: view)
         op.printPanel.options = [.showsCopies, .showsPageRange]
         op.run()
+        #else
+        // На iOS печать доступна через системную шторку «Поделиться» (AirPrint).
+        ShareFile.present(data: data, fileName: "Зарплата_\(Keys.day(month)).pdf")
+        #endif
     }
 }

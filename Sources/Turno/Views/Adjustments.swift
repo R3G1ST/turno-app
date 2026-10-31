@@ -1,5 +1,7 @@
 import SwiftUI
+#if canImport(AppKit)
 import AppKit
+#endif
 
 // MARK: - Лист: добавить / редактировать премию
 
@@ -52,7 +54,11 @@ struct PremiumSheet: View {
             }
         }
         .padding(22)
+        #if os(macOS)
         .frame(width: 400)
+        #else
+        .frame(maxWidth: .infinity)
+        #endif
         .onAppear {
             if let p = existing {
                 employeeID = p.employeeID
@@ -149,7 +155,11 @@ struct FineSheet: View {
             }
         }
         .padding(22)
+        #if os(macOS)
         .frame(width: 440)
+        #else
+        .frame(maxWidth: .infinity)
+        #endif
         .onAppear {
             if let f = existing {
                 employeeID = f.employeeID
@@ -227,7 +237,11 @@ struct AdjustmentsManager: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        #if os(macOS)
         .frame(width: 600, height: 500)
+        #else
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        #endif
         .sheet(item: $editingPremium) { p in
             PremiumSheet(month: month, existing: p).environmentObject(store)
         }

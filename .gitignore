@@ -1,5 +1,5 @@
 .build/
 build/
-*.icns
-.DS_Store
-.swiftpm/
+DerivedData/
+*.xcuserdatad
+xcuserdata/

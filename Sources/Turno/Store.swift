@@ -60,20 +60,54 @@ final class Store: ObservableObject {
     private(set) var loadFailed = false
 
     static let appName = "Turno"
-    static var supportDir: URL {
+
+    /// Локальная папка данных (Application Support) — fallback, когда iCloud недоступен.
+    private static var localDir: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return base.appendingPathComponent("Turno", isDirectory: true)
     }
+
+    /// Папка в iCloud (ubiquity container /Documents/Turno). nil, если iCloud недоступен
+    /// (нет подписи с entitlements, либо iCloud выключен). Считается один раз.
+    static let iCloudDir: URL? = {
+        guard let container = FileManager.default.url(forUbiquityContainerIdentifier: nil) else { return nil }
+        return container.appendingPathComponent("Documents/Turno", isDirectory: true)
+    }()
+
+    /// Рабочая папка: iCloud, если доступен, иначе локальная.
+    static var supportDir: URL { iCloudDir ?? localDir }
+    static var localDataFile: URL { localDir.appendingPathComponent("turno.json") }
     static var dataFile: URL { supportDir.appendingPathComponent("turno.json") }
     static var backupsDir: URL { supportDir.appendingPathComponent("Backups", isDirectory: true) }
 
     private var saveTask: Task<Void, Never>?
 
     init() {
+        migrateToiCloudIfNeeded()
         load()
         // Демо-данные поднимаем только если файла нет вовсе (не когда файл был, но не прочитался).
         if !hasLoadedRealData && !loadFailed {
             seedIfEmpty()
+        }
+    }
+
+    /// Однократный перенос локальных данных в iCloud (если iCloud доступен, а там ещё пусто).
+    private func migrateToiCloudIfNeeded() {
+        guard Store.iCloudDir != nil else { return }
+        let fm = FileManager.default
+        let localFile = Store.localDataFile
+        let iCloudFile = Store.dataFile
+        guard fm.fileExists(atPath: localFile.path), !fm.fileExists(atPath: iCloudFile.path) else { return }
+        try? fm.createDirectory(at: Store.supportDir, withIntermediateDirectories: true)
+        try? fm.copyItem(at: localFile, to: iCloudFile)
+        // Переносим и резервные копии.
+        let localBackups = Store.localDir.appendingPathComponent("Backups")
+        let iCloudBackups = Store.backupsDir
+        if let files = try? fm.contentsOfDirectory(at: localBackups, includingPropertiesForKeys: nil) {
+            try? fm.createDirectory(at: iCloudBackups, withIntermediateDirectories: true)
+            for f in files {
+                try? fm.copyItem(at: f, to: iCloudBackups.appendingPathComponent(f.lastPathComponent))
+            }
         }
     }
 
