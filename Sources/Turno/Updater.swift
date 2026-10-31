@@ -91,12 +91,19 @@ final class Updater: ObservableObject {
                 try FileManager.default.copyItem(at: appInDmg, to: target)
                 progress = 1
 
-                // Перезапуск
+                // Перезапуск новой версии
                 let relaunch = Process()
                 relaunch.executableURL = URL(fileURLWithPath: "/usr/bin/open")
                 relaunch.arguments = ["-n", target.path]
                 try relaunch.run()
-                NSApp.terminate(nil)
+                // Закрываем старую копию: сначала штатно, затем страховка —
+                // иначе старое окно зависает на «Установка… 100%».
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    NSApp.terminate(nil)
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                    exit(0)
+                }
             } catch {
                 isInstalling = false
                 errorMessage = "Не удалось обновить: \(error.localizedDescription). Скачайте установщик вручную: github.com/\(Self.repo)/releases"
