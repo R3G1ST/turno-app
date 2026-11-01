@@ -17,7 +17,13 @@ let w = cg.width, h = cg.height
 guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8,
                           bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
                           bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { exit(1) }
-ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+// Зум внутрь: рисуем картинку больше холста, чтобы прозрачная кайма и артефакты
+// скруглений маковской иконки вышли за края — видимая площадь будет целиком непрозрачной.
+let zoom: CGFloat = 1.14
+let side = CGFloat(w) * zoom
+let off = (side - CGFloat(w)) / 2
+ctx.interpolationQuality = .high
+ctx.draw(cg, in: CGRect(x: -off, y: -off, width: side, height: side))
 guard let buf = ctx.data else { exit(1) }
 let bp = buf.assumingMemoryBound(to: UInt8.self)
 let strideBytes = ctx.bytesPerRow
@@ -27,6 +33,10 @@ func copyPx(_ from: Int, _ to: Int, y: Int) {
     let o = y * strideBytes
     for c in 0..<3 { bp[o + to * 4 + c] = bp[o + from * 4 + c] }
     bp[o + to * 4 + 3] = 255
+}
+func copyV(_ from: Int, _ to: Int, x: Int) {
+    for c in 0..<3 { bp[to * strideBytes + x * 4 + c] = bp[from * strideBytes + x * 4 + c] }
+    bp[to * strideBytes + x * 4 + 3] = 255
 }
 
 // Слева направо: тянем цвет последнего непрозрачного пикселя в прозрачные зоны.
@@ -42,6 +52,22 @@ for y in 0..<h {
     for x in stride(from: w - 1, through: 0, by: -1) {
         if alphaAt(x, y) > 200 { lastRight = x } else if let lr = lastRight {
             copyPx(lr, x, y: y)
+        }
+    }
+}
+// Сверху вниз / снизу вверх: строки, целиком прозрачные (верх и низ у скруглений),
+// горизонтальная заливка не трогает — тянем цвет ближайшей непрозрачной строки.
+for x in 0..<w {
+    var lastDown: Int?
+    for y in 0..<h {
+        if alphaAt(x, y) > 200 { lastDown = y } else if let ld = lastDown {
+            copyV(ld, y, x: x)
+        }
+    }
+    var lastUp: Int?
+    for y in stride(from: h - 1, through: 0, by: -1) {
+        if alphaAt(x, y) > 200 { lastUp = y } else if let lu = lastUp {
+            copyV(lu, y, x: x)
         }
     }
 }
