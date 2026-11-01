@@ -66,9 +66,54 @@ struct RootView: View {
 
     var body: some View {
         #if os(macOS)
-        macBody
+        macBody.overlay(alignment: .top) { importBanner }
         #else
-        iosBody
+        iosBody.overlay(alignment: .top) { importBanner }
+        #endif
+    }
+
+    /// Гарантированно видимый результат импорта: баннер поверх всего экрана.
+    /// (Системный алерт при открытии файла из шаринга может не появиться —
+    /// окно ещё не готово, и сообщение «терялось».)
+    private var importBanner: some View {
+        Group {
+            if let msg = store.importMessage {
+                VStack(spacing: 6) {
+                    Label(store.importMessageHasError ? "Импорт не удался" : "Импорт данных",
+                          systemImage: store.importMessageHasError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                        .font(.headline)
+                    Text(msg)
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .multilineTextAlignment(.center)
+                    Text("Нажмите, чтобы закрыть")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 14)
+                .frame(maxWidth: 460)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .strokeBorder(store.importMessageHasError ? Color.red.opacity(0.5) : Color.green.opacity(0.5))
+                )
+                .shadow(radius: 12, y: 4)
+                .padding(.top, 10)
+                .onTapGesture { store.importMessage = nil }
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .zIndex(999)
+            }
+        }
+        .animation(.spring(duration: 0.3), value: store.importMessage)
+    }
+
+    /// После успешного импорта сразу показываем календарь с данными.
+    private func focusAfterImport() {
+        guard !store.importMessageHasError else { return }
+        tab = .schedule
+        #if os(macOS)
+        showSettings = false
         #endif
     }
 
@@ -90,13 +135,8 @@ struct RootView: View {
             UpdateSheet(info: info)
                 .environmentObject(updater)
         }
-        // Единый алерт результата импорта (работает и на маке, если импортировали файл).
-        .alert(store.importMessageHasError ? "Импорт не удался" : "Импорт данных",
-               isPresented: Binding(get: { store.importMessage != nil },
-                                    set: { if !$0 { store.importMessage = nil } })) {
-            Button("OK") { store.importMessage = nil }
-        } message: {
-            Text(store.importMessage ?? "")
+        .onChange(of: store.importMessage) { _, msg in
+            if msg != nil { focusAfterImport() }
         }
     }
 
@@ -164,13 +204,8 @@ struct RootView: View {
             guard url.isFileURL else { return }
             store.importFromFile(url: url)
         }
-        // Единый алерт результата импорта (из пикера или из шаринга).
-        .alert(store.importMessageHasError ? "Импорт не удался" : "Импорт данных",
-               isPresented: Binding(get: { store.importMessage != nil },
-                                    set: { if !$0 { store.importMessage = nil } })) {
-            Button("OK") { store.importMessage = nil }
-        } message: {
-            Text(store.importMessage ?? "")
+        .onChange(of: store.importMessage) { _, msg in
+            if msg != nil { focusAfterImport() }
         }
     }
 }
