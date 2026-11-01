@@ -9,9 +9,9 @@
     <key>CFBundleIdentifier</key>
     <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
     <key>CFBundleVersion</key>
-    <string>10</string>
+    <string>11</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.9</string>
+    <string>1.0.10</string>
     <key>CFBundleExecutable</key>
     <string>$(EXECUTABLE_NAME)</string>
     <key>CFBundlePackageType</key>
@@ -48,6 +48,14 @@
             <string>Turno</string>
             <key>NSUbiquitousContainerSupportedFolderLevels</key>
             <string>Any</string>
+        </dict>
+    </dict>
+    <key>CFBundleIcons</key>
+    <dict>
+        <key>CFBundlePrimaryIcon</key>
+        <dict>
+            <key>CFBundleIconName</key>
+            <string>AppIcon</string>
         </dict>
     </dict>
 </dict>

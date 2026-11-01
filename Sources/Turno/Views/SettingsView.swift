@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 #if canImport(AppKit)
 import AppKit
 #endif
@@ -11,6 +12,9 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var backupMsg: String?
     @State private var tab: Tab = .thresholds
+    @State private var showImport = false
+    @State private var transferMsg: String?
+    @State private var transferMsgHasError = false
 
     enum Tab: String, CaseIterable, Identifiable {
         case thresholds = "Надбавки"
@@ -47,6 +51,53 @@ struct SettingsView: View {
         #if os(macOS)
         .frame(width: 640, height: 480)
         #endif
+        .fileImporter(isPresented: $showImport, allowedContentTypes: [.json]) { result in
+            switch result {
+            case .success(let url):
+                do {
+                    // fileImporter даёт временный доступ — читаем сразу, с доступом к файлу.
+                    let access = url.startAccessingSecurityScopedResource()
+                    defer { if access { url.stopAccessingSecurityScopedResource() } }
+                    let raw = try Data(contentsOf: url)
+                    try store.importJSON(raw)
+                    transferMsg = "Импортировано: \(store.data.employees.count) сотр., смен — \(store.data.shifts.count)"
+                    transferMsgHasError = false
+                } catch {
+                    transferMsg = "Ошибка импорта: \(error.localizedDescription)"
+                    transferMsgHasError = true
+                }
+            case .failure(let err):
+                transferMsg = "Импорт отменён/ошибка: \(err.localizedDescription)"
+                transferMsgHasError = true
+            }
+        }
+    }
+
+    /// Экспорт данных в JSON: на маке — окно сохранения, на телефоне — шторка «Поделиться».
+    private func exportJSON() {
+        do {
+            let data = try store.exportJSON()
+            let name = "Turno_данные.json"
+            #if os(macOS)
+            let panel = NSSavePanel()
+            panel.nameFieldStringValue = name
+            panel.allowedContentTypes = [.json]
+            panel.begin { resp in
+                if resp == .OK, let url = panel.url {
+                    try? data.write(to: url)
+                    transferMsg = "Файл сохранён — отправьте его на другое устройство"
+                    transferMsgHasError = false
+                }
+            }
+            #else
+            ShareFile.present(data: data, fileName: name)
+            transferMsg = "Отправьте файл на другое устройство (AirDrop и т.п.)"
+            transferMsgHasError = false
+            #endif
+        } catch {
+            transferMsg = "Ошибка экспорта: \(error.localizedDescription)"
+            transferMsgHasError = true
+        }
     }
 
     private var header: some View {
@@ -152,6 +203,29 @@ struct SettingsView: View {
                 NSWorkspace.shared.open(Store.supportDir)
             }
             #endif
+
+            Divider()
+
+            Text("Перенос на другое устройство")
+                .font(.headline)
+            Text("Экспорт сохраняет все данные в один JSON-файл — отправьте его на другое устройство (AirDrop, мессенджер) и импортируйте там. Импорт заменит текущие данные, они будут заранее сохранены в резервную копию.")
+                .font(.caption).foregroundStyle(.secondary)
+
+            HStack(spacing: 12) {
+                Button {
+                    exportJSON()
+                } label: { Label("Экспорт данных", systemImage: "square.and.arrow.up") }
+
+                Button {
+                    showImport = true
+                } label: { Label("Импорт данных", systemImage: "square.and.arrow.down") }
+            }
+
+            if let transferMsg {
+                Text(transferMsg)
+                    .font(.caption)
+                    .foregroundStyle(transferMsgHasError ? .red : .secondary)
+            }
 
             Spacer()
             Text("Последние 10 копий хранятся автоматически в папке Backups.")

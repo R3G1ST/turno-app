@@ -217,6 +217,31 @@ final class Store: ObservableObject {
         pruneBackups()
     }
 
+    // MARK: Экспорт / импорт данных (перенос между маком и телефоном)
+
+    /// JSON-файл со всеми данными — для передачи на другое устройство.
+    func exportJSON() throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .deferredToDate
+        return try encoder.encode(data)
+    }
+
+    /// Импорт данных из JSON-файла (перезаписывает текущие; перед этим старые сохраняются в бэкап).
+    func importJSON(_ raw: Data) throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .deferredToDate
+        let decoded = try decoder.decode(AppData.self, from: raw)
+        // Страховка: текущие данные в бэкап, если они были.
+        if !data.employees.isEmpty || !data.shifts.isEmpty {
+            try? backup()
+        }
+        data = decoded
+        hasLoadedRealData = true
+        migrate()
+        saveNow()
+    }
+
     private func pruneBackups(keep: Int = 10) {
         let fm = FileManager.default
         guard let files = try? fm.contentsOfDirectory(at: Self.backupsDir, includingPropertiesForKeys: [.creationDateKey])

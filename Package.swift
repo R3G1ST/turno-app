@@ -7,7 +7,8 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "Turno",
-            path: "Sources/Turno"
+            path: "Sources/Turno",
+            exclude: ["Assets.xcassets"]   // iOS-каталог иконок, мак использует .icns
         )
     ]
 )
