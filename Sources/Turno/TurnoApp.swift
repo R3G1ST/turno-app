@@ -90,6 +90,14 @@ struct RootView: View {
             UpdateSheet(info: info)
                 .environmentObject(updater)
         }
+        // Единый алерт результата импорта (работает и на маке, если импортировали файл).
+        .alert(store.importMessageHasError ? "Импорт не удался" : "Импорт данных",
+               isPresented: Binding(get: { store.importMessage != nil },
+                                    set: { if !$0 { store.importMessage = nil } })) {
+            Button("OK") { store.importMessage = nil }
+        } message: {
+            Text(store.importMessage ?? "")
+        }
     }
 
     private var sidebar: some View {
@@ -150,6 +158,19 @@ struct RootView: View {
                 .environmentObject(updater)
                 .tabItem { Label("Настройки", systemImage: Tab.settings.icon) }
                 .tag(Tab.settings)
+        }
+        // Импорт данных файлом: «Поделиться → Turno» или «Открыть в Turno» из Файлов.
+        .onOpenURL { url in
+            guard url.isFileURL else { return }
+            store.importFromFile(url: url)
+        }
+        // Единый алерт результата импорта (из пикера или из шаринга).
+        .alert(store.importMessageHasError ? "Импорт не удался" : "Импорт данных",
+               isPresented: Binding(get: { store.importMessage != nil },
+                                    set: { if !$0 { store.importMessage = nil } })) {
+            Button("OK") { store.importMessage = nil }
+        } message: {
+            Text(store.importMessage ?? "")
         }
     }
 }

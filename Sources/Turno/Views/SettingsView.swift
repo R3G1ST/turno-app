@@ -15,7 +15,6 @@ struct SettingsView: View {
     @State private var showImport = false
     @State private var transferMsg: String?
     @State private var transferMsgHasError = false
-    @State private var showTransferAlert = false
 
     enum Tab: String, CaseIterable, Identifiable {
         case thresholds = "Надбавки"
@@ -60,35 +59,16 @@ struct SettingsView: View {
                       allowsMultipleSelection: false) { result in
             switch result {
             case .success(let urls):
-                guard let url = urls.first else { return }
-                do {
-                    // fileImporter даёт временный доступ — читаем сразу, с доступом к файлу.
-                    let access = url.startAccessingSecurityScopedResource()
-                    defer { if access { url.stopAccessingSecurityScopedResource() } }
-                    let raw = try Data(contentsOf: url)
-                    guard !raw.isEmpty else {
-                        throw NSError(domain: "Turno", code: 1,
-                                      userInfo: [NSLocalizedDescriptionKey: "файл пуст"])
-                    }
-                    try store.importJSON(raw)
-                    transferMsg = "✅ Импортировано: сотрудников — \(store.data.employees.count), смен — \(store.data.shifts.count), дней выручки — \(store.data.revenues.count)"
-                    transferMsgHasError = false
-                } catch {
-                    transferMsg = "❌ Не получилось импортировать этот файл.\nНужен JSON-файл, экспортированный из Turno (Настройки → Данные → Экспорт данных).\nПричина: \(error.localizedDescription)"
+                if let url = urls.first {
+                    store.importFromFile(url: url)
+                }
+            case .failure(let err):
+                // Отмена (просто закрыли окно) — не показываем ошибку.
+                if (err as NSError).code != NSUserCancelledError {
+                    transferMsg = "Не удалось открыть выбор файла: \(err.localizedDescription)"
                     transferMsgHasError = true
                 }
-                showTransferAlert = true
-            case .failure(let err):
-                transferMsg = "Импорт отменён или ошибка выбора файла: \(err.localizedDescription)"
-                transferMsgHasError = true
-                showTransferAlert = true
             }
-        }
-        .alert(transferMsgHasError ? "Импорт данных" : "Импорт данных",
-               isPresented: $showTransferAlert) {
-            Button("OK") { transferMsg = nil }
-        } message: {
-            Text(transferMsg ?? "")
         }
     }
 

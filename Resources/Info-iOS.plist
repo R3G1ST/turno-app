@@ -58,5 +58,24 @@
             <string>AppIcon</string>
         </dict>
     </dict>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Данные Turno (JSON)</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Default</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.json</string>
+                <string>public.data</string>
+                <string>public.text</string>
+            </array>
+        </dict>
+    </array>
+    <key>LSSupportsOpeningDocumentsInPlace</key>
+    <true/>
 </dict>
 </plist>

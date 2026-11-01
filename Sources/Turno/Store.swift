@@ -240,6 +240,39 @@ final class Store: ObservableObject {
         hasLoadedRealData = true
         migrate()
         saveNow()
+        showImportMessage(
+            "✅ Импортировано: сотрудников — \(decoded.employees.count), смен — \(decoded.shifts.count), дней выручки — \(decoded.revenues.count)",
+            error: false)
+    }
+
+    // MARK: Импорт по URL (шаринг/«Открыть в Turno»)
+
+    /// Сообщение о результате импорта — показывается алертом из любого места приложения.
+    @Published var importMessage: String?
+    @Published var importMessageHasError = false
+
+    /// Импорт данных по файлу из Файлов/шаринга. Работает независимо от пикера.
+    func importFromFile(url: URL) {
+        do {
+            // Доступ к файлу из Файлов/шаринга временный — берём сразу.
+            let access = url.startAccessingSecurityScopedResource()
+            defer { if access { url.stopAccessingSecurityScopedResource() } }
+            let raw = try Data(contentsOf: url)
+            guard !raw.isEmpty else {
+                throw NSError(domain: "Turno", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: "файл пуст"])
+            }
+            try importJSON(raw)
+        } catch {
+            showImportMessage(
+                "❌ Файл не подошёл.\nНужен JSON-файл, экспортированный из Turno (Настройки → Данные → Экспорт данных).\nПричина: \(error.localizedDescription)",
+                error: true)
+        }
+    }
+
+    private func showImportMessage(_ text: String, error: Bool) {
+        importMessage = text
+        importMessageHasError = error
     }
 
     private func pruneBackups(keep: Int = 10) {
