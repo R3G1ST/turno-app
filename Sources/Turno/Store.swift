@@ -299,6 +299,31 @@ final class Store: ObservableObject {
         data.revenues[Keys.day(date)] ?? DayRevenue()
     }
 
+    /// Месяц с последней активностью (смены, выручка, премии, штрафы).
+    /// Используется как стартовый месяц в календаре и ведомости, чтобы
+    /// приложение открывалось там, где есть данные (не слепо на текущем).
+    var lastActiveMonth: Date {
+        let cal = Calendar.current
+        var candidates: [Date] = []
+        for key in data.shifts.keys {
+            if let d = Keys.date(fromDayKey: key) { candidates.append(d) }
+        }
+        for key in data.revenues.keys {
+            if let d = Keys.date(fromDayKey: key) { candidates.append(d) }
+        }
+        for p in data.premiums { candidates.append(p.date) }
+        for f in data.fines {
+            // startMonth в формате "yyyy-MM" → 1-е число месяца
+            let f2 = DateFormatter()
+            f2.calendar = Calendar.current
+            f2.locale = Locale(identifier: "ru_RU")
+            f2.dateFormat = "yyyy-MM"
+            if let d = f2.date(from: f.startMonth) { candidates.append(d) }
+        }
+        guard let last = candidates.max() else { return Date() }
+        return cal.date(from: cal.dateComponents([.year, .month], from: last)) ?? Date()
+    }
+
     func setRevenue(_ revenue: DayRevenue, date: Date) {
         if revenue.total == 0 {
             data.revenues.removeValue(forKey: Keys.day(date))

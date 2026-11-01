@@ -179,6 +179,17 @@ enum Keys {
     static func shift(employee: UUID, date: Date) -> String {
         "\(employee.uuidString)|\(day(date))"
     }
+
+    /// Дата из ключа дня ("yyyy-MM-dd") или из ключа смены ("UUID|yyyy-MM-dd").
+    /// nil, если строка не распознана.
+    static func date(fromDayKey key: String) -> Date? {
+        let tail = key.split(separator: "|").last.map(String.init) ?? key
+        let f = DateFormatter()
+        f.calendar = Calendar.current
+        f.locale = Locale(identifier: "ru_RU")
+        f.dateFormat = "yyyy-MM-dd"
+        return f.date(from: tail)
+    }
 }
 
 // MARK: - Шаблоны заполнения

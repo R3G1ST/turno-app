@@ -12,6 +12,7 @@ import UIKit
 struct PayrollView: View {
     @EnvironmentObject var store: Store
     @State private var month: Date = Calendar.current.startOfDay(for: Date())
+    @State private var monthInitialized = false
     @State private var expanded: UUID?
     @State private var showPremium = false
     @State private var showFine = false
@@ -62,6 +63,13 @@ struct PayrollView: View {
                 deleteFineTarget = nil
             }
             Button("Отмена", role: .cancel) { deleteFineTarget = nil }
+        }
+        .onAppear {
+            // Стартуем на месяце с последними данными (см. ScheduleView).
+            if !monthInitialized {
+                monthInitialized = true
+                month = store.lastActiveMonth
+            }
         }
     }
 

@@ -11,6 +11,7 @@ import UIKit
 struct ScheduleView: View {
     @EnvironmentObject var store: Store
     @State private var month: Date = Calendar.current.startOfDay(for: Date())
+    @State private var monthInitialized = false
     @State private var editedDay: Date?
     @State private var showTemplates = false
     @State private var copiedFlash = false
@@ -82,6 +83,14 @@ struct ScheduleView: View {
         .sheet(isPresented: $showTemplates) {
             TemplatesSheet(month: month)
                 .environmentObject(store)
+        }
+        .onAppear {
+            // При первом открытии показываем месяц с последними данными,
+            // а не слепо текущий (иначе после окончания месяца кажется, что данные пропали).
+            if !monthInitialized {
+                monthInitialized = true
+                month = store.lastActiveMonth
+            }
         }
         .overlay(alignment: .top) {
             if copiedFlash {
