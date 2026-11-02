@@ -20,6 +20,7 @@ struct PayrollView: View {
     @State private var editingPremium: Premium?
     @State private var editingFine: Fine?
     @State private var deleteFineTarget: Fine?
+    @State private var copyFlash = false
 
     private var cal: Calendar { Calendar.current }
     private var monthTitle: String {
@@ -45,14 +46,35 @@ struct PayrollView: View {
             Divider()
             list
         }
+        .overlay(alignment: .top) {
+            if copyFlash {
+                Label("Ведомость скопирована", systemImage: "checkmark.circle.fill")
+                    .font(.callout.weight(.semibold))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(.regularMaterial, in: Capsule())
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .padding(.top, 8)
+            }
+        }
+        .animation(.snappy, value: copyFlash)
         .sheet(isPresented: $showManager) {
             AdjustmentsManager(month: month).environmentObject(store)
+                #if os(iOS)
+                .presentationDetents([.large])
+                #endif
         }
         .sheet(item: $editingPremium) { p in
             PremiumSheet(month: month, existing: p).environmentObject(store)
+                #if os(iOS)
+                .presentationDetents([.large])
+                #endif
         }
         .sheet(item: $editingFine) { f in
             FineSheet(month: month, existing: f).environmentObject(store)
+                #if os(iOS)
+                .presentationDetents([.large])
+                #endif
         }
         .confirmationDialog("Удалить штраф «\(deleteFineTarget?.note ?? "")» по всем месяцам?",
                             isPresented: Binding(get: { deleteFineTarget != nil },
@@ -81,45 +103,40 @@ struct PayrollView: View {
 #endif
     }
 
-    /// Компактная шапка под телефон: месяц отдельной строкой, кнопки — в горизонтальной прокрутке.
+    /// Компактная шапка под телефон: месяц, свайп по списку, действия капсулами.
     private var compactHeader: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 8) {
             HStack(spacing: 4) {
                 Button { shiftMonth(-1) } label: {
-                    Image(systemName: "chevron.left").font(.body.weight(.semibold))
+                    Image(systemName: "chevron.left")
+                        .font(.body.weight(.semibold))
+                        .frame(width: 30, height: 30)
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(PressableButtonStyle())
+
                 Text(monthTitle)
-                    .font(.headline)
+                    .font(.title3.weight(.bold))
                     .frame(maxWidth: .infinity)
+                    .contentTransition(.interpolate)
+
                 Button { shiftMonth(1) } label: {
-                    Image(systemName: "chevron.right").font(.body.weight(.semibold))
+                    Image(systemName: "chevron.right")
+                        .font(.body.weight(.semibold))
+                        .frame(width: 30, height: 30)
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(PressableButtonStyle())
             }
 
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 16) {
-                    Button { showPremium = true } label: {
-                        Label("Премия", systemImage: "star").font(.subheadline)
-                    }
-                    Button { showFine = true } label: {
-                        Label("Штраф", systemImage: "exclamationmark.octagon").font(.subheadline)
-                    }
-                    Button { showManager = true } label: {
-                        Label("Все начисления", systemImage: "list.bullet.rectangle").font(.subheadline)
-                    }
-                    Button { exportCSV() } label: {
-                        Label("CSV", systemImage: "tablecells").font(.subheadline)
-                    }
-                    Button { exportPDF() } label: {
-                        Label("PDF", systemImage: "doc.richtext").font(.subheadline)
-                    }
-                    Button { printPDF() } label: {
-                        Label("Печать", systemImage: "printer").font(.subheadline)
-                    }
+                HStack(spacing: 8) {
+                    actionChip("Премия", "star") { showPremium = true }
+                    actionChip("Штраф", "exclamationmark.octagon") { showFine = true }
+                    actionChip("Начисления", "list.bullet.rectangle") { showManager = true }
+                    actionChip("Текст", "doc.on.doc") { copyPayrollText() }
+                    actionChip("CSV", "tablecells") { exportCSV() }
+                    actionChip("PDF", "doc.richtext") { exportPDF() }
+                    actionChip("Печать", "printer") { printPDF() }
                 }
-                .buttonStyle(.borderless)
             }
         }
         .padding(.horizontal, 16)
@@ -127,10 +144,31 @@ struct PayrollView: View {
         .background(.ultraThinMaterial)
         .sheet(isPresented: $showPremium) {
             PremiumSheet(month: month).environmentObject(store)
+                #if os(iOS)
+                .presentationDetents([.large])
+                #endif
         }
         .sheet(isPresented: $showFine) {
             FineSheet(month: month).environmentObject(store)
+                #if os(iOS)
+                .presentationDetents([.large])
+                #endif
         }
+    }
+
+    private func actionChip(_ title: String, _ icon: String,
+                            action: @escaping () -> Void) -> some View {
+        Button {
+            Haptics.tap()
+            action()
+        } label: {
+            Label(title, systemImage: icon)
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 11)
+                .padding(.vertical, 7)
+                .background(.quaternary.opacity(0.35), in: Capsule())
+        }
+        .buttonStyle(PressableButtonStyle())
     }
 
     private var macHeader: some View {
@@ -149,6 +187,10 @@ struct PayrollView: View {
                 showManager = true
             } label: { Label("Все начисления", systemImage: "list.bullet.rectangle") }
             Button {
+                copyPayrollText()
+            } label: { Image(systemName: "doc.on.doc") }
+                .help("Скопировать ведомость текстом")
+            Button {
                 exportCSV()
             } label: { Label("CSV", systemImage: "tablecells") }
             Button {
@@ -164,14 +206,22 @@ struct PayrollView: View {
         .background(.ultraThinMaterial)
         .sheet(isPresented: $showPremium) {
             PremiumSheet(month: month).environmentObject(store)
+                #if os(iOS)
+                .presentationDetents([.large])
+                #endif
         }
         .sheet(isPresented: $showFine) {
             FineSheet(month: month).environmentObject(store)
+                #if os(iOS)
+                .presentationDetents([.large])
+                #endif
         }
     }
 
     private func shiftMonth(_ delta: Int) {
-        if let d = cal.date(byAdding: .month, value: delta, to: month) { month = d }
+        guard let d = cal.date(byAdding: .month, value: delta, to: month) else { return }
+        withAnimation(.snappy(duration: 0.28)) { month = d }
+        Haptics.select()
     }
 
     private var list: some View {
@@ -182,140 +232,241 @@ struct PayrollView: View {
                     rowCard(pay)
                 }
             }
-            .padding(20)
+            .padding(listPadding)
             .frame(maxWidth: 820)
         }
+        .monthSwipe { shiftMonth($0) }
+    }
+
+    /// Отступы списка: на телефоне компактнее.
+    private var listPadding: CGFloat {
+#if os(iOS)
+        14
+#else
+        20
+#endif
     }
 
     private var totalCard: some View {
-        HStack {
-            VStack(alignment: .leading) {
-                Text("Итого за \(monthTitle.lowercased())")
-                    .font(.caption).foregroundStyle(.secondary)
-                Text("К выплате")
-                    .font(.headline)
+        VStack(spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Итого за \(monthTitle.lowercased())")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text("К выплате")
+                        .font(.headline)
+                }
+                Spacer(minLength: 8)
+                Text("\(Money.grouped(grandTotal)) ₽")
+                    .font(.system(size: 30, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                    .foregroundStyle(
+                        LinearGradient(colors: [.accentColor, .purple],
+                                       startPoint: .leading, endPoint: .trailing)
+                    )
+                    .contentTransition(.numericText())
             }
-            Spacer()
-            Text("\(Int(grandTotal)) ₽")
-                .font(.system(size: 30, weight: .bold, design: .rounded))
-                .monospacedDigit()
-                .foregroundStyle(
-                    LinearGradient(colors: [.accentColor, .purple], startPoint: .leading, endPoint: .trailing)
-                )
+
+            Divider()
+
+            HStack {
+                Label("Выручка за месяц", systemImage: "banknote")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("\(Money.grouped(store.monthRevenue(month))) ₽")
+                    .font(.callout.weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(store.monthRevenue(month) > 0 ? Color.green : Color.secondary)
+                    .contentTransition(.numericText())
+            }
         }
-        .padding(20)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .padding(18)
+        .background(
+            LinearGradient(colors: [Color.accentColor.opacity(0.10), Color.purple.opacity(0.06)],
+                           startPoint: .topLeading, endPoint: .bottomTrailing),
+            in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Color.accentColor.opacity(0.12), lineWidth: 1)
+        )
+        .animation(.snappy, value: grandTotal)
+        .animation(.snappy, value: store.monthRevenue(month))
     }
 
     private func rowCard(_ pay: EmployeePay) -> some View {
         let isOpen = expanded == pay.id
-        return VStack(alignment: .leading, spacing: 8) {
+        return VStack(alignment: .leading, spacing: 10) {
             Button {
-                withAnimation(.snappy) { expanded = isOpen ? nil : pay.id }
-            } label: {
-                HStack {
-                    Image(systemName: pay.employee.role.icon)
-                        .foregroundStyle(pay.employee.color)
-                    VStack(alignment: .leading) {
-                        Text(pay.employee.name).fontWeight(.medium)
-                        Text("\(pay.workDays) смен · база \(Int(pay.baseTotal)) · надбавки \(Int(pay.bonusTotal))"
-                             + (pay.premiumTotal > 0 ? " · премии +\(Int(pay.premiumTotal))" : "")
-                             + (pay.fineTotal > 0 ? " · штрафы −\(Int(pay.fineTotal))" : ""))
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Text("\(Int(pay.total)) ₽")
-                        .font(.system(.title3, design: .rounded).weight(.semibold))
-                        .monospacedDigit()
-                        .foregroundStyle(pay.total < 0 ? .red : .primary)
-                    Image(systemName: isOpen ? "chevron.up" : "chevron.down")
-                        .font(.caption).foregroundStyle(.secondary)
+                Haptics.tap()
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.84)) {
+                    expanded = isOpen ? nil : pay.id
                 }
+            } label: {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: pay.employee.role.icon)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 34, height: 34)
+                        .background(pay.employee.color.gradient,
+                                    in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(pay.employee.name)
+                                .font(.callout.weight(.semibold))
+                                .lineLimit(1)
+                            Spacer(minLength: 6)
+                            Text("\(Money.grouped(pay.total)) ₽")
+                                .font(.system(.title3, design: .rounded).weight(.bold))
+                                .monospacedDigit()
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.7)
+                                .foregroundStyle(pay.total < 0 ? .red : .primary)
+                                .contentTransition(.numericText())
+                        }
+                        Text(summaryLine(pay))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .multilineTextAlignment(.leading)
+                    }
+
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(isOpen ? 180 : 0))
+                        .padding(.top, 4)
+                }
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
             if isOpen {
                 Divider()
                 ForEach(pay.shifts) { s in
-                    HStack {
+                    HStack(spacing: 8) {
                         Text(dayStr(s.date)).font(.callout)
                         Text(s.kind.rawValue)
-                            .font(.caption)
+                            .font(.caption2.weight(.medium))
                             .padding(.horizontal, 7).padding(.vertical, 2)
-                            .background(s.kind.color.opacity(0.2), in: Capsule())
-                        Spacer()
+                            .background(s.kind.color.opacity(0.18), in: Capsule())
+                        Spacer(minLength: 4)
                         if !s.bonuses.isEmpty {
                             Text("+" + s.bonuses.map { "+\(Int($0.amount))" }.joined(separator: " "))
-                                .font(.caption).foregroundStyle(.green)
+                                .font(.caption2).foregroundStyle(.green)
+                                .lineLimit(1)
                         }
-                        Text("\(Int(s.total)) ₽")
+                        Text("\(Money.grouped(s.total)) ₽")
                             .font(.callout.weight(.semibold).monospacedDigit())
                             .frame(width: amountWidth, alignment: .trailing)
                     }
-                    .font(.callout)
+                    .padding(.vertical, 2)
                 }
 
                 if !pay.premiums.isEmpty {
                     Divider()
                     ForEach(pay.premiums) { p in
-                        HStack {
+                        HStack(spacing: 8) {
                             Image(systemName: "star.fill")
                                 .font(.caption)
                                 .foregroundStyle(.yellow)
-                            Text(p.note).font(.callout).lineLimit(1)
-                            Spacer()
-                            Text(dayStr(p.date)).font(.caption).foregroundStyle(.secondary)
-                            Text("+\(Int(p.amount)) ₽")
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(p.note).font(.callout).lineLimit(1)
+                                Text(dayStr(p.date))
+                                    .font(.caption2).foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 4)
+                            Text("+\(Money.grouped(p.amount)) ₽")
                                 .font(.callout.weight(.semibold).monospacedDigit())
                                 .foregroundStyle(.green)
-                                .frame(width: amountWidth, alignment: .trailing)
-                            Button { editingPremium = p } label: {
-                                Image(systemName: "pencil").font(.caption)
-                            }
-                            .buttonStyle(.borderless)
-                            .help("Редактировать премию")
-                            Button { store.deletePremium(p) } label: {
-                                Image(systemName: "trash").font(.caption)
-                            }
-                            .buttonStyle(.borderless)
-                            .foregroundStyle(.red)
-                            .help("Удалить премию")
+                            rowActions(edit: { editingPremium = p },
+                                       delete: { store.deletePremium(p) })
                         }
+                        .padding(.vertical, 2)
                     }
                 }
 
                 if !pay.fines.isEmpty {
                     Divider()
                     ForEach(pay.fines) { f in
-                        HStack {
+                        HStack(spacing: 8) {
                             Image(systemName: "exclamationmark.octagon.fill")
                                 .font(.caption)
                                 .foregroundStyle(.red)
-                            Text(f.note).font(.callout).lineLimit(1)
-                            Spacer()
-                            Text("удержание").font(.caption).foregroundStyle(.secondary)
-                            Text("−\(Int(f.amount)) ₽")
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(f.note).font(.callout).lineLimit(1)
+                                Text("удержание")
+                                    .font(.caption2).foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 4)
+                            Text("−\(Money.grouped(f.amount)) ₽")
                                 .font(.callout.weight(.semibold).monospacedDigit())
                                 .foregroundStyle(.red)
-                                .frame(width: amountWidth, alignment: .trailing)
-                            Button { if let parent = parentFine(f) { editingFine = parent } } label: {
-                                Image(systemName: "pencil").font(.caption)
-                            }
-                            .buttonStyle(.borderless)
-                            .help("Редактировать штраф (весь, по всем месяцам)")
-                            Button { if let parent = parentFine(f) { deleteFineTarget = parent } } label: {
-                                Image(systemName: "trash").font(.caption)
-                            }
-                            .buttonStyle(.borderless)
-                            .foregroundStyle(.red)
-                            .help("Удалить штраф (весь, по всем месяцам)")
+                            rowActions(
+                                edit: { if let parent = parentFine(f) { editingFine = parent } },
+                                delete: { if let parent = parentFine(f) { deleteFineTarget = parent } }
+                            )
                         }
+                        .padding(.vertical, 2)
                     }
                 }
             }
         }
-        .padding(16)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .padding(14)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.05), lineWidth: 1)
+        )
+        .animation(.snappy, value: pay.total)
+    }
+
+    /// Краткая строка под именем: смены, база, надбавки, премии, штрафы.
+    private func summaryLine(_ pay: EmployeePay) -> String {
+        var parts = ["\(pay.workDays) смен",
+                     "база \(Money.grouped(pay.baseTotal))",
+                     "надбавки \(Money.grouped(pay.bonusTotal))"]
+        if pay.premiumTotal > 0 { parts.append("премии +\(Money.grouped(pay.premiumTotal))") }
+        if pay.fineTotal > 0 { parts.append("штрафы −\(Money.grouped(pay.fineTotal))") }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Действия строки начисления. На телефоне — компактное меню (крупная зона нажатия),
+    /// на маке — две быстрые кнопки.
+    @ViewBuilder
+    private func rowActions(edit: @escaping () -> Void,
+                            delete: @escaping () -> Void) -> some View {
+        #if os(iOS)
+        Menu {
+            Button { edit() } label: { Label("Изменить", systemImage: "pencil") }
+            Button(role: .destructive) { delete() } label: { Label("Удалить", systemImage: "trash") }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .font(.body)
+                .frame(width: 30, height: 30)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        #else
+        HStack(spacing: 2) {
+            Button(action: edit) {
+                Image(systemName: "pencil").frame(width: 24, height: 24)
+            }
+            .buttonStyle(.borderless)
+            .help("Редактировать")
+            Button(action: delete) {
+                Image(systemName: "trash").frame(width: 24, height: 24)
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.red)
+            .help("Удалить")
+        }
+        #endif
     }
 
     private func dayStr(_ d: Date) -> String {
@@ -331,6 +482,32 @@ struct PayrollView: View {
               let uuid = UUID(uuidString: String(raw))
         else { return nil }
         return store.fine(id: uuid)
+    }
+
+    // MARK: - Копирование ведомости текстом
+
+    private func copyPayrollText() {
+        var text = "Turno — ведомость\n\(monthTitle)\n\n"
+        text += "Выручка за месяц: \(Money.grouped(store.monthRevenue(month))) ₽\n"
+        text += "К выплате: \(Money.grouped(grandTotal)) ₽\n\n"
+        for pay in rows {
+            text += "\(pay.employee.name): \(pay.workDays) смен — \(Money.grouped(pay.total)) ₽"
+            if pay.premiumTotal > 0 { text += ", премии +\(Money.grouped(pay.premiumTotal))" }
+            if pay.fineTotal > 0 { text += ", штрафы −\(Money.grouped(pay.fineTotal))" }
+            text += "\n"
+        }
+        #if os(macOS)
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+        #else
+        UIPasteboard.general.string = text
+        #endif
+        Haptics.success()
+        withAnimation(.snappy) { copyFlash = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+            withAnimation(.snappy) { copyFlash = false }
+        }
     }
 
     // MARK: - Экспорт CSV

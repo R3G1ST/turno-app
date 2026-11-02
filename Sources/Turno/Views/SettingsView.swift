@@ -33,23 +33,27 @@ struct SettingsView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .padding(.horizontal, 18)
+            .padding(.horizontal, 16)
             .padding(.top, 12)
             .padding(.bottom, 4)
 
-            Group {
-                switch tab {
-                case .thresholds: thresholdsTab
-                case .data: dataTab
-                case .updates: updatesTab
-                }
+            #if os(iOS)
+            // На телефоне вкладки прокручиваются: контент выше экрана.
+            ScrollView {
+                tabContent
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
+                    .padding(.bottom, 32)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.horizontal, 18)
-            .padding(.bottom, 18)
+            #else
+            tabContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(.horizontal, 18)
+                .padding(.bottom, 18)
+            #endif
         }
         #if os(macOS)
-        .frame(width: 640, height: 480)
+        .frame(width: 660, height: 520)
         #endif
         .fileImporter(isPresented: $showImport,
                       // .item — принимаем файл любого типа: мессенджеры/AirDrop могут
@@ -69,6 +73,15 @@ struct SettingsView: View {
                     transferMsgHasError = true
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var tabContent: some View {
+        switch tab {
+        case .thresholds: thresholdsTab
+        case .data: dataTab
+        case .updates: updatesTab
         }
     }
 
@@ -100,10 +113,16 @@ struct SettingsView: View {
     }
 
     private var header: some View {
-        HStack {
-            Text("Настройки")
-                .font(.title3.weight(.semibold))
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Настройки")
+                    .font(.title3.weight(.semibold))
+                Text("Надбавки, данные и обновления")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
             Spacer()
+            #if os(macOS)
             Button {
                 dismiss()
             } label: {
@@ -114,9 +133,10 @@ struct SettingsView: View {
             .buttonStyle(.plain)
             .keyboardShortcut(.cancelAction)
             .help("Закрыть (Esc)")
+            #endif
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 11)
         .background(windowChrome)
     }
 
@@ -134,158 +154,375 @@ struct SettingsView: View {
 
     private var thresholdsTab: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Надбавки за выручку заведения")
-                .font(.headline)
-            Text("Если дневная выручка достигла порога, каждый работник смены получает надбавку.")
-                .font(.caption).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Надбавки за выручку")
+                    .font(.headline)
+                Text("Когда дневная выручка достигает порога, каждый работник смены получает надбавку.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             ForEach($store.data.thresholds) { $t in
-                HStack {
-                    Text("Выручка ≥")
-                        .font(.callout)
-                    TextField("", value: $t.revenueFrom, format: .number)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 110)
-                    Text("₽ → +")
-                        .font(.callout)
-                    TextField("", value: $t.amount, format: .number)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 90)
-                    Text("₽").font(.callout)
-                    Toggle("", isOn: $t.enabled).toggleStyle(.switch).labelsHidden()
-                    Button {
-                        store.data.thresholds.removeAll { $0.id == t.id }
-                        store.saveNow()
-                    } label: { Image(systemName: "trash") }
-                        .buttonStyle(.borderless)
-                }
-                .padding(10)
-                .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 10))
+                thresholdCard($t)
+            }
+
+            if store.data.thresholds.isEmpty {
+                Label("Порогов пока нет", systemImage: "chart.line.uptrend.xyaxis")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+                    .background(Color.primary.opacity(0.04),
+                                in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
 
             Button {
-                store.data.thresholds.append(BonusThreshold(revenueFrom: 0, amount: 300))
+                Haptics.tap()
+                withAnimation(.snappy) {
+                    store.data.thresholds.append(BonusThreshold(revenueFrom: 0, amount: 300))
+                }
                 store.saveNow()
-            } label: { Label("Добавить порог", systemImage: "plus") }
+            } label: {
+                Label("Добавить порог", systemImage: "plus.circle.fill")
+                    .font(.callout.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 9)
+                    .background(Color.accentColor.opacity(0.12),
+                                in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+            .buttonStyle(PressableButtonStyle())
 
-            Spacer()
+            #if os(macOS)
+            Spacer(minLength: 0)
+            #endif
         }
-        .padding(18)
+    }
+
+    private func thresholdCard(_ t: Binding<BonusThreshold>) -> some View {
+        VStack(spacing: 9) {
+            HStack(spacing: 8) {
+                Image(systemName: "chart.line.uptrend.xyaxis")
+                    .font(.caption)
+                    .foregroundStyle(t.wrappedValue.enabled ? Color.accentColor : Color.secondary)
+                Text("Порог выручки")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Toggle("", isOn: t.enabled)
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .labelsHidden()
+                    .help("Порог включён")
+                Button {
+                    Haptics.warning()
+                    withAnimation(.snappy) {
+                        store.data.thresholds.removeAll { $0.id == t.wrappedValue.id }
+                    }
+                    store.saveNow()
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .frame(width: 26, height: 26)
+                        .background(Color.red.opacity(0.10), in: Circle())
+                }
+                .buttonStyle(PressableButtonStyle())
+                .help("Удалить порог")
+            }
+
+            HStack(alignment: .bottom, spacing: 8) {
+                thresholdField("Выручка от", t.revenueFrom)
+                Image(systemName: "arrow.right")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .padding(.bottom, 8)
+                thresholdField("Надбавка каждому", t.amount)
+            }
+
+            Text("При выручке от \(Money.grouped(t.wrappedValue.revenueFrom)) ₽ работник получает +\(Money.grouped(t.wrappedValue.amount)) ₽.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .background(.regularMaterial,
+                    in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.05), lineWidth: 1)
+        )
+        .opacity(t.wrappedValue.enabled ? 1 : 0.62)
+        .animation(.snappy, value: t.wrappedValue.enabled)
+        .onChange(of: t.wrappedValue.revenueFrom) { _, _ in store.saveSoon() }
+        .onChange(of: t.wrappedValue.amount) { _, _ in store.saveSoon() }
+        .onChange(of: t.wrappedValue.enabled) { _, _ in store.saveSoon() }
+    }
+
+    private func thresholdField(_ title: String, _ value: Binding<Double>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            HStack(spacing: 4) {
+                TextField("0", value: value, format: .number)
+                    .textFieldStyle(.roundedBorder)
+                    .multilineTextAlignment(.trailing)
+                    .font(.system(.callout, design: .rounded).weight(.semibold).monospacedDigit())
+                    #if os(iOS)
+                    .keyboardType(.numberPad)
+                    #endif
+                Text("₽")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity)
     }
 
     // MARK: Данные
 
     private var dataTab: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Хранение данных")
-                .font(.headline)
-            Text("Файл: \(Store.dataFile.path)")
-                .font(.caption).foregroundStyle(.secondary)
-                .textSelection(.enabled)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Хранение данных")
+                    .font(.headline)
+                Text("Файл turno.json и 10 автоматических копий в папке Backups.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
-            HStack {
-                Button("Создать резервную копию") {
-                    do {
-                        try store.backup()
-                        backupMsg = "Копия сохранена в Backups"
-                    } catch {
-                        backupMsg = "Ошибка: \(error.localizedDescription)"
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 10),
+                                GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                dataStat("Сотрудники", "\(store.data.employees.count)", "person.2.fill")
+                dataStat("Смены", "\(store.data.shifts.count)", "calendar")
+                dataStat("Дни с выручкой", "\(store.data.revenues.count)", "banknote")
+                dataStat("Премии и штрафы", "\(store.data.premiums.count + store.data.fines.count)", "star.circle.fill")
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text(Store.dataFile.path)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+
+                HStack(spacing: 10) {
+                    Button {
+                        do {
+                            try store.backup()
+                            Haptics.success()
+                            backupMsg = "Копия сохранена"
+                        } catch {
+                            backupMsg = "Ошибка: \(error.localizedDescription)"
+                        }
+                    } label: {
+                        Label("Резервная копия", systemImage: "externaldrive.badge.plus")
                     }
+
+                    #if os(macOS)
+                    Button {
+                        NSWorkspace.shared.open(Store.supportDir)
+                    } label: {
+                        Label("Открыть папку", systemImage: "folder")
+                    }
+                    #endif
                 }
+                .font(.callout)
+
                 if let msg = backupMsg {
                     Text(msg).font(.caption).foregroundStyle(.secondary)
                 }
             }
-
-            #if os(macOS)
-            Button("Открыть папку данных") {
-                NSWorkspace.shared.open(Store.supportDir)
-            }
-            #endif
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .background(.regularMaterial,
+                        in: RoundedRectangle(cornerRadius: 14, style: .continuous))
 
             Divider()
 
-            Text("Перенос на другое устройство")
-                .font(.headline)
-            Text("Экспорт сохраняет все данные в один JSON-файл — отправьте его на другое устройство (AirDrop, мессенджер) и импортируйте там. Импорт заменит текущие данные, они будут заранее сохранены в резервную копию.")
-                .font(.caption).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Перенос на другое устройство")
+                    .font(.headline)
+                Text("Экспорт сохраняет все данные в один JSON-файл — отправьте его на другое устройство (AirDrop, мессенджер) и импортируйте там. Импорт заменит текущие данные, они будут заранее сохранены в резервную копию.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
-            HStack(spacing: 12) {
+            HStack(spacing: 10) {
                 Button {
                     exportJSON()
-                } label: { Label("Экспорт данных", systemImage: "square.and.arrow.up") }
-
+                } label: {
+                    Label("Экспорт", systemImage: "square.and.arrow.up")
+                        .frame(maxWidth: .infinity)
+                }
                 Button {
                     showImport = true
-                } label: { Label("Импорт данных", systemImage: "square.and.arrow.down") }
+                } label: {
+                    Label("Импорт", systemImage: "square.and.arrow.down")
+                        .frame(maxWidth: .infinity)
+                }
             }
+            .buttonStyle(.bordered)
+            .font(.callout.weight(.medium))
 
             #if os(iOS)
-            Divider()
-            Button {
-                store.importFromPasteboard()
-            } label: { Label("Импорт из буфера обмена", systemImage: "doc.on.clipboard") }
-
-            Button {
-                store.scanInbox()
-                if store.pendingInboxFile == nil {
-                    transferMsg = "В папке Turno файлов нет. Положите JSON туда: в Файлах — файл → ⋯ → Переместить → На моём iPhone → Turno."
-                    transferMsgHasError = false
-                } else {
-                    transferMsg = nil
+            VStack(spacing: 8) {
+                Button {
+                    store.importFromPasteboard()
+                } label: {
+                    Label("Импорт из буфера обмена", systemImage: "doc.on.clipboard")
+                        .frame(maxWidth: .infinity)
                 }
-            } label: { Label("Импорт из папки приложения", systemImage: "folder") }
+                .buttonStyle(.borderedProminent)
+
+                Button {
+                    store.scanInbox()
+                    if store.pendingInboxFile == nil {
+                        transferMsg = "В папке Turno файлов нет. Положите JSON туда: в Файлах — файл → ⋯ → Переместить → На моём iPhone → Turno."
+                        transferMsgHasError = false
+                    } else {
+                        transferMsg = nil
+                    }
+                } label: {
+                    Label("Импорт из папки приложения", systemImage: "folder")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+            }
+            .font(.callout.weight(.medium))
 
             Text("Если «Поделиться → Turno» не работает, есть два гарантированных пути:\n1) Файлы → файл → Поделиться → Копировать → здесь «Импорт из буфера обмена».\n2) Файлы → файл → ⋯ → Переместить → На моём iPhone → Turno → здесь «Импорт из папки приложения» (или просто откройте Turno — баннер найдёт файл сам).")
-                .font(.caption2).foregroundStyle(.secondary)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             if let last = store.lastOpenedFile {
                 Text("Последний открытый файл: \(last)")
-                    .font(.caption2).foregroundStyle(.secondary)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
             }
             #endif
 
             if let transferMsg {
-                Text(transferMsg)
+                Label(transferMsg, systemImage: transferMsgHasError ? "exclamationmark.triangle.fill" : "info.circle")
                     .font(.caption)
                     .foregroundStyle(transferMsgHasError ? .red : .secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
             }
 
-            Spacer()
-            Text("Последние 10 копий хранятся автоматически в папке Backups.")
-                .font(.caption).foregroundStyle(.secondary)
+            #if os(macOS)
+            Spacer(minLength: 0)
+            #endif
         }
-        .padding(18)
+        .animation(.snappy, value: transferMsg)
+    }
+
+    private func dataStat(_ title: String, _ value: String, _ icon: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Image(systemName: icon)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.system(.title3, design: .rounded).weight(.bold))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(.regularMaterial,
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     // MARK: Обновления
 
     private var updatesTab: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Обновления")
-                .font(.headline)
-            Text("Turno \(Updater.currentVersion) · GitHub: R3G1ST/turno-app")
-                .font(.caption).foregroundStyle(.secondary)
-
-            Toggle("Проверять обновления при запуске", isOn: $store.data.checkUpdatesOnLaunch)
-                .onChange(of: store.data.checkUpdatesOnLaunch) { _, _ in store.saveSoon() }
-
-            Button("Проверить сейчас") { updater.checkManual() }
-
-            if let info = updater.updateInfo {
-                Text("Доступна версия \(info.version)")
-                    .foregroundStyle(.green)
-            } else if updater.lastCheckDone {
-                Text("У вас последняя версия ✓")
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Обновления")
+                    .font(.headline)
+                Text("Turno \(Updater.currentVersion) · R3G1ST/turno-app")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
-            Spacer()
+            VStack(alignment: .leading, spacing: 12) {
+                Toggle("Проверять обновления при запуске", isOn: $store.data.checkUpdatesOnLaunch)
+                    .font(.callout)
+                    .onChange(of: store.data.checkUpdatesOnLaunch) { _, _ in
+                        Haptics.select()
+                        store.saveSoon()
+                    }
+
+                Divider()
+
+                HStack(spacing: 10) {
+                    Button {
+                        Haptics.tap()
+                        updater.checkManual()
+                    } label: {
+                        Label("Проверить сейчас", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                    .buttonStyle(.bordered)
+
+                    Spacer(minLength: 0)
+
+                    if updater.updateInfo != nil {
+                        Label("Есть обновление", systemImage: "arrow.down.circle.fill")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.green)
+                    } else if updater.lastCheckDone {
+                        Label("Актуальная версия", systemImage: "checkmark.seal.fill")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .padding(14)
+            .background(.regularMaterial,
+                        in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+            if let info = updater.updateInfo {
+                HStack(spacing: 8) {
+                    Image(systemName: "sparkles")
+                        .foregroundStyle(.green)
+                    Text("Доступна версия \(info.version)")
+                        .font(.callout.weight(.medium))
+                    Spacer()
+                    Button("Обновить") {
+                        updater.install(info)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                }
+                .padding(14)
+                .background(Color.green.opacity(0.08),
+                            in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+
             Text("Обновления устанавливаются автоматически: скачивается образ .app с GitHub Releases и заменяет приложение. Данные не затрагиваются.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            #if os(macOS)
+            Spacer(minLength: 0)
+            #endif
         }
-        .padding(18)
     }
 }
 

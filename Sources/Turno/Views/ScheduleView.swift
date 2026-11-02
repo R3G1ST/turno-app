@@ -14,6 +14,7 @@ struct ScheduleView: View {
     @State private var monthInitialized = false
     @State private var editedDay: Date?
     @State private var showTemplates = false
+    @State private var showSummary = false
     @State private var copiedFlash = false
 
     private var cal: Calendar {
@@ -62,6 +63,21 @@ struct ScheduleView: View {
                         if let day {
                             DayCell(month: $month, day: day)
                                 .contextMenu { dayContextMenu(day) }
+                                .onTapGesture {
+                                    Haptics.tap()
+                                    editedDay = day
+                                }
+                                #if os(iOS)
+                                .sheet(isPresented: Binding(
+                                    get: { editedDay == day },
+                                    set: { if !$0 { editedDay = nil } }
+                                )) {
+                                    DayEditor(day: day)
+                                        .environmentObject(store)
+                                        .presentationDetents([.medium, .large])
+                                        .presentationDragIndicator(.visible)
+                                }
+                                #else
                                 .popover(isPresented: Binding(
                                     get: { editedDay == day },
                                     set: { if !$0 { editedDay = nil } }
@@ -69,7 +85,7 @@ struct ScheduleView: View {
                                     DayEditor(day: day)
                                         .environmentObject(store)
                                 }
-                                .onTapGesture { editedDay = day }
+                                #endif
                         } else {
                             Color.clear.frame(height: cellHeight)
                         }
@@ -82,11 +98,19 @@ struct ScheduleView: View {
         }
         #if os(iOS)
         // Свайп влево/вправо по календарю листает месяцы (вместо стрелок).
-        .simultaneousGesture(monthSwipeGesture)
+        .monthSwipe { shiftMonth($0) }
         #endif
         .sheet(isPresented: $showTemplates) {
             TemplatesSheet(month: month)
                 .environmentObject(store)
+        }
+        .sheet(isPresented: $showSummary) {
+            MonthSummarySheet(month: month)
+                .environmentObject(store)
+                #if os(iOS)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                #endif
         }
         .onAppear {
             // При первом открытии показываем месяц с последними данными,
@@ -139,38 +163,47 @@ struct ScheduleView: View {
 #endif
     }
 
-    /// Компактная шапка под узкий экран телефона: две строки, иконки без подписей.
+    /// Компактная шапка под узкий экран телефона: месяц + выручка, ниже действия.
     /// Месяц листается свайпом по календарю, поэтому стрелок нет.
     private var compactHeader: some View {
-        VStack(spacing: 6) {
-            Text(monthTitle)
-                .font(.headline)
-                .frame(maxWidth: .infinity)
-                .contentShape(Rectangle())
-
-            HStack(spacing: 12) {
-                Button { month = cal.startOfDay(for: Date()) } label: {
-                    Text("Сегодня").font(.subheadline.weight(.medium))
-                }
-                .buttonStyle(.borderless)
+        VStack(spacing: 8) {
+            HStack(spacing: 10) {
+                Text(monthTitle)
+                    .font(.title3.weight(.bold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentTransition(.interpolate)
 
                 monthRevenueLabel
+            }
+
+            HStack(spacing: 10) {
+                Button {
+                    Haptics.tap()
+                    withAnimation(.snappy) { month = cal.startOfDay(for: Date()) }
+                } label: {
+                    Text("Сегодня")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(.quaternary.opacity(0.45), in: Capsule())
+                }
+                .buttonStyle(PressableButtonStyle())
+                .disabled(isCurrentMonth)
+                .opacity(isCurrentMonth ? 0.45 : 1)
 
                 Spacer(minLength: 4)
 
-                Button {
+                headerIcon("chart.bar.xaxis") {
+                    showSummary = true
+                }
+                headerIcon("photo.on.rectangle") {
                     copyScheduleAsImage()
-                } label: {
-                    Image(systemName: "photo.on.rectangle")
                 }
-                .buttonStyle(.borderless)
-
-                Button {
+                headerIcon("wand.and.stars") {
                     showTemplates = true
-                } label: {
-                    Image(systemName: "wand.and.stars")
                 }
-                .buttonStyle(.borderless)
             }
         }
         .padding(.horizontal, 16)
@@ -178,29 +211,63 @@ struct ScheduleView: View {
         .background(.ultraThinMaterial)
     }
 
-    /// Выручка за показанный месяц — короткий вариант для телефона.
-    private var monthRevenueLabel: some View {
-        HStack(spacing: 4) {
-            Image(systemName: "banknote").font(.caption2)
-            Text("Выручка \(Money.grouped(monthRevenue)) ₽")
-                .font(.caption.weight(.semibold))
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
+    /// Круглая иконка действия в шапке: зона нажатия 30×30 и пружинка.
+    private func headerIcon(_ name: String, action: @escaping () -> Void) -> some View {
+        Button {
+            Haptics.tap()
+            action()
+        } label: {
+            Image(systemName: name)
+                .font(.system(size: 15, weight: .semibold))
+                .frame(width: 30, height: 30)
+                .background(.quaternary.opacity(0.35), in: Circle())
         }
-        .foregroundStyle(monthRevenue > 0 ? Color.green : Color.secondary)
-        .accessibilityLabel("Выручка за месяц \(Money.grouped(monthRevenue)) рублей")
+        .buttonStyle(PressableButtonStyle())
+    }
+
+    /// Выручка за показанный месяц. Нажатие открывает сводку месяца.
+    private var monthRevenueLabel: some View {
+        Button {
+            Haptics.tap()
+            showSummary = true
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "banknote").font(.caption2)
+                Text("\(Money.grouped(monthRevenue)) ₽")
+                    .font(.caption.weight(.semibold))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.65)
+                    .contentTransition(.numericText())
+                Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold))
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .foregroundStyle(monthRevenue > 0 ? Color.green : Color.secondary)
+            .background(
+                (monthRevenue > 0 ? Color.green : Color.secondary).opacity(0.12),
+                in: Capsule()
+            )
+        }
+        .buttonStyle(PressableButtonStyle())
+        .animation(.snappy, value: monthRevenue)
+        .accessibilityLabel("Выручка за месяц \(Money.grouped(monthRevenue)) рублей. Открыть сводку месяца")
     }
 
     private var macHeader: some View {
         HStack(spacing: 12) {
             Button { shiftMonth(-1) } label: { Image(systemName: "chevron.left") }
                 .buttonStyle(.borderless)
+                .keyboardShortcut(.leftArrow, modifiers: .command)
+                .help("Предыдущий месяц (⌘←)")
             Text(monthTitle)
                 .font(.title2.weight(.semibold))
                 .frame(minWidth: 190)
+                .contentTransition(.interpolate)
             Button { shiftMonth(1) } label: { Image(systemName: "chevron.right") }
                 .buttonStyle(.borderless)
+                .keyboardShortcut(.rightArrow, modifiers: .command)
+                .help("Следующий месяц (⌘→)")
             Button("Сегодня") { month = cal.startOfDay(for: Date()) }
                 .buttonStyle(.borderless)
 
@@ -211,11 +278,19 @@ struct ScheduleView: View {
                 Text("Выручка за месяц: \(Money.grouped(monthRevenue)) ₽")
                     .font(.callout.weight(.medium))
                     .monospacedDigit()
+                    .contentTransition(.numericText())
             }
             .foregroundStyle(monthRevenue > 0 ? Color.green : Color.secondary)
             .help("Сумма выручки за все дни показанного месяца")
+            .animation(.snappy, value: monthRevenue)
 
             Spacer()
+
+            Button {
+                showSummary = true
+            } label: { Label("Сводка месяца", systemImage: "chart.bar.xaxis") }
+                .buttonStyle(.borderless)
+                .help("Выручка, смены и выплаты за показанный месяц")
 
             Button {
                 copyScheduleAsImage()
@@ -250,28 +325,18 @@ struct ScheduleView: View {
     }
 
     private func shiftMonth(_ delta: Int) {
-        if let d = cal.date(byAdding: .month, value: delta, to: month) { month = d }
+        guard let d = cal.date(byAdding: .month, value: delta, to: month) else { return }
+        withAnimation(.snappy(duration: 0.28)) { month = d }
+        Haptics.select()
     }
 
     /// Суммарная выручка за показанный месяц.
     private var monthRevenue: Double { store.monthRevenue(month) }
 
-#if os(iOS)
-    /// Свайп по календарю: влево — следующий месяц, вправо — предыдущий.
-    /// Срабатывает только на явно горизонтальном движении, чтобы не мешать
-    /// вертикальной прокрутке сетки.
-    private var monthSwipeGesture: some Gesture {
-        DragGesture(minimumDistance: 18)
-            .onEnded { value in
-                let dx = value.translation.width
-                let dy = value.translation.height
-                guard abs(dx) > 50, abs(dx) > abs(dy) * 1.4 else { return }
-                withAnimation(.snappy(duration: 0.28)) {
-                    shiftMonth(dx < 0 ? 1 : -1)
-                }
-            }
+    /// Открыт ли текущий календарный месяц (кнопка «Сегодня» тогда неактивна).
+    private var isCurrentMonth: Bool {
+        cal.isDate(month, equalTo: Date(), toGranularity: .month)
     }
-#endif
 
     // MARK: Копирование графика как изображения
 
@@ -516,12 +581,16 @@ struct DayCell: View {
     }
 }
 
-// MARK: - Редактор дня: выбор сотрудников
+// MARK: - Редактор дня: сотрудники + выручка
 
 struct DayEditor: View {
     @EnvironmentObject var store: Store
     @Environment(\.dismiss) private var dismiss
     let day: Date
+
+    @State private var hookahText = ""
+    @State private var barText = ""
+    @State private var fieldsLoaded = false
 
     private var title: String {
         let f = DateFormatter()
@@ -530,47 +599,171 @@ struct DayEditor: View {
         return f.string(from: day).capitalized
     }
 
+    private var revTotal: Double {
+        (Double(hookahText.replacingOccurrences(of: ",", with: ".")) ?? 0)
+        + (Double(barText.replacingOccurrences(of: ",", with: ".")) ?? 0)
+    }
+
+    private var bonusEach: Double {
+        store.passedThresholds(date: day).reduce(0.0) { $0 + $1.amount }
+    }
+
+    private var payout: Double {
+        store.workedEmployees(date: day).reduce(0.0) { sum, emp in
+            let s = store.resolvedShift(employee: emp.id, date: day)
+            return sum + (s.rateOverride ?? emp.defaultShiftRate) + bonusEach
+        }
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text(title).font(.headline)
+        VStack(spacing: 0) {
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.headline)
+                    Text("Включите, кто работает в этот день")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
                 Spacer()
-                Button("Готово") { dismiss() }
-                    .keyboardShortcut(.defaultAction)
+                Button("Готово") {
+                    Haptics.tap()
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderless)
+                .font(.callout.weight(.semibold))
             }
-            .padding(14)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
 
             Divider()
 
             ScrollView {
-                VStack(spacing: 2) {
+                VStack(spacing: 4) {
                     ForEach(store.data.employees.filter(\.active)) { emp in
                         EmployeeDayRow(day: day, employee: emp)
                     }
+
+                    if store.data.employees.contains(where: \.active) {
+                        HStack(spacing: 8) {
+                            quickButton("Все на смене", "person.2.fill") { setAll(true) }
+                            quickButton("Выходной всем", "moon.zzz.fill") { setAll(false) }
+                        }
+                        .padding(.top, 6)
+                    }
                 }
-                .padding(10)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
             }
-            .frame(height: 320)
+            #if os(macOS)
+            .frame(height: 280)
+            #else
+            .frame(minHeight: 160)
+            #endif
 
             Divider()
-
-            let rev = store.revenue(date: day)
-            HStack {
-                Label("Выручка: \(Int(rev.total)) ₽", systemImage: "banknote")
-                    .font(.callout)
-                    .foregroundStyle(rev.total > 0 ? .green : .secondary)
-                Spacer()
-                Text("\(store.workedEmployees(date: day).count) на смене")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(12)
+            revenueSection
         }
-#if os(macOS)
-        .frame(width: 340)
-#else
+        #if os(macOS)
+        .frame(width: 360)
+        #else
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-#endif
+        #endif
+        .onAppear(perform: loadFields)
+    }
+
+    private func loadFields() {
+        let rev = store.revenue(date: day)
+        hookahText = rev.hookah == 0 ? "" : formatted(rev.hookah)
+        barText = rev.bar == 0 ? "" : formatted(rev.bar)
+        fieldsLoaded = true
+    }
+
+    private func formatted(_ v: Double) -> String {
+        v == v.rounded() ? String(Int(v)) : String(v)
+    }
+
+    private func setAll(_ working: Bool) {
+        Haptics.success()
+        withAnimation(.snappy) {
+            for emp in store.data.employees where emp.active {
+                store.setShift(Shift(kind: working ? .work : .off),
+                               employee: emp.id, date: day)
+            }
+        }
+        store.saveNow()
+    }
+
+    private func quickButton(_ title: String, _ icon: String,
+                             action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: icon)
+                .font(.caption2.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 7)
+                .background(Color.primary.opacity(0.05),
+                            in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(PressableButtonStyle())
+    }
+
+    private func commit() {
+        guard fieldsLoaded else { return }
+        let h = Double(hookahText.replacingOccurrences(of: ",", with: ".")) ?? 0
+        let b = Double(barText.replacingOccurrences(of: ",", with: ".")) ?? 0
+        store.setRevenue(DayRevenue(hookah: h, bar: b), date: day)
+    }
+
+    private var revenueSection: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 10) {
+                moneyField("Кальянная", $hookahText)
+                moneyField("Бар", $barText)
+            }
+
+            HStack(alignment: .firstTextBaseline) {
+                Label("Итого за день", systemImage: "equal.circle")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Text("\(Money.grouped(revTotal)) ₽")
+                    .font(.system(.title3, design: .rounded).weight(.bold))
+                    .monospacedDigit()
+                    .foregroundStyle(revTotal > 0 ? Color.green : Color.secondary)
+                    .contentTransition(.numericText())
+            }
+            .animation(.snappy, value: revTotal)
+
+            HStack {
+                Label("\(store.workedEmployees(date: day).count) на смене",
+                      systemImage: "person.2.fill")
+                    .font(.caption2).foregroundStyle(.secondary)
+                Spacer()
+                Text("К выплате: \(Money.grouped(payout)) ₽")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .contentTransition(.numericText())
+            }
+            .animation(.snappy, value: payout)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(.regularMaterial)
+    }
+
+    private func moneyField(_ title: String, _ text: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.caption2).foregroundStyle(.secondary)
+            TextField("0", text: text)
+                #if os(iOS)
+                .keyboardType(.decimalPad)
+                #endif
+                .textFieldStyle(.roundedBorder)
+                .font(.system(.body, design: .rounded).weight(.semibold).monospacedDigit())
+                .multilineTextAlignment(.trailing)
+                .onChange(of: text.wrappedValue) { _, _ in commit() }
+        }
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -583,35 +776,41 @@ struct EmployeeDayRow: View {
     private var isWork: Bool { shift.kind.isWork }
 
     var body: some View {
-        HStack(spacing: 8) {
-            Circle().fill(employee.color).frame(width: 8, height: 8)
-
-            Toggle(isOn: Binding(
-                get: { isWork },
-                set: { on in
+        Toggle(isOn: Binding(
+            get: { isWork },
+            set: { on in
+                Haptics.select()
+                withAnimation(.snappy) {
                     store.setShift(Shift(kind: on ? .work : .off), employee: employee.id, date: day)
                 }
-            )) {
+            }
+        )) {
+            HStack(spacing: 10) {
+                Circle().fill(employee.color).frame(width: 10, height: 10)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(employee.name).font(.callout)
+                    Text(employee.name).font(.callout.weight(.medium))
                     Text(employee.role.rawValue).font(.caption2).foregroundStyle(.secondary)
                 }
-            }
-            .toggleStyle(.switch)
-            .controlSize(.small)
-
-            if isWork {
-                Text("полная смена")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                Spacer(minLength: 6)
+                if isWork {
+                    Text("полная")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(employee.color)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(employee.color.opacity(0.14), in: Capsule())
+                }
             }
         }
-        .padding(.vertical, 4)
-        .padding(.horizontal, 8)
+        .toggleStyle(.switch)
+        .controlSize(.small)
+        .padding(.vertical, 6)
+        .padding(.horizontal, 10)
         .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(isWork ? employee.color.opacity(0.08) : .clear)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(isWork ? employee.color.opacity(0.10) : Color.primary.opacity(0.03))
         )
+        .animation(.snappy, value: isWork)
     }
 }
 
@@ -760,6 +959,235 @@ struct ScheduleImageCanvas: View {
                     .foregroundStyle(i >= 5 ? Color.red.opacity(0.7) : Color.secondary)
                     .frame(maxWidth: .infinity)
             }
+        }
+    }
+}
+
+// MARK: - Сводка месяца
+
+/// Итоги месяца: выручка, смены, выплаты и разбивка по сотрудникам.
+struct MonthSummarySheet: View {
+    @EnvironmentObject var store: Store
+    @Environment(\.dismiss) private var dismiss
+    let month: Date
+
+    @State private var copied = false
+
+    private var cal: Calendar { Calendar.current }
+
+    private var monthTitle: String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "ru_RU")
+        f.dateFormat = "LLLL yyyy"
+        return f.string(from: month).capitalized
+    }
+
+    private var rows: [EmployeePay] { store.payroll(forMonth: month) }
+    private var payrollTotal: Double { rows.reduce(0) { $0 + $1.total } }
+    private var revenue: Double { store.monthRevenue(month) }
+    private var shifts: Int { rows.reduce(0) { $0 + $1.workDays } }
+    private var premiums: Double { rows.reduce(0) { $0 + $1.premiumTotal } }
+    private var fines: Double { rows.reduce(0) { $0 + $1.fineTotal } }
+
+    /// Дни, в которые кто-то работал.
+    private var workDays: Int {
+        guard let interval = cal.dateInterval(of: .month, for: month) else { return 0 }
+        var count = 0
+        var d = interval.start
+        while d < interval.end {
+            if !store.workedEmployees(date: d).isEmpty { count += 1 }
+            guard let next = cal.date(byAdding: .day, value: 1, to: d) else { break }
+            d = next
+        }
+        return count
+    }
+
+    private var avgPerDay: Double {
+        workDays > 0 ? revenue / Double(workDays) : 0
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Сводка месяца").font(.headline)
+                    Text(monthTitle).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    copyText()
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                        .font(.callout.weight(.semibold))
+                        .frame(width: 30, height: 30)
+                        .background(.quaternary.opacity(0.35), in: Circle())
+                }
+                .buttonStyle(PressableButtonStyle())
+                .help("Скопировать сводку текстом")
+
+                Button("Готово") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderless)
+                    .font(.callout.weight(.semibold))
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+
+            Divider()
+
+            ScrollView {
+                VStack(spacing: 14) {
+                    revenueCard
+                    statsGrid
+                    breakdown
+                    employeesList
+                }
+                .padding(16)
+            }
+        }
+        #if os(macOS)
+        .frame(width: 470, height: 620)
+        #else
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        #endif
+        .overlay(alignment: .bottom) {
+            if copied {
+                Label("Сводка скопирована", systemImage: "checkmark.circle.fill")
+                    .font(.callout.weight(.semibold))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(.regularMaterial, in: Capsule())
+                    .padding(.bottom, 16)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.snappy, value: copied)
+    }
+
+    private var revenueCard: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Выручка за месяц").font(.caption).foregroundStyle(.secondary)
+            Text("\(Money.grouped(revenue)) ₽")
+                .font(.system(size: 38, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(
+                    LinearGradient(colors: [.green, .accentColor],
+                                   startPoint: .leading, endPoint: .trailing)
+                )
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+                .contentTransition(.numericText())
+                .animation(.snappy, value: revenue)
+            Text("Средняя выручка за рабочий день: \(Money.grouped(avgPerDay)) ₽")
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(
+            LinearGradient(colors: [Color.green.opacity(0.12), Color.accentColor.opacity(0.08)],
+                           startPoint: .topLeading, endPoint: .bottomTrailing),
+            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+        )
+    }
+
+    private var statsGrid: some View {
+        LazyVGrid(columns: [GridItem(.flexible(), spacing: 10),
+                            GridItem(.flexible(), spacing: 10)], spacing: 10) {
+            stat("Смен", "\(shifts)", icon: "calendar.badge.clock")
+            stat("Рабочих дней", "\(workDays)", icon: "calendar")
+            stat("К выплате", "\(Money.grouped(payrollTotal)) ₽", icon: "rublesign.circle")
+            stat("Средняя за день", "\(Money.grouped(avgPerDay)) ₽", icon: "chart.line.uptrend.xyaxis")
+        }
+    }
+
+    private func stat(_ title: String, _ value: String, icon: String) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Image(systemName: icon).font(.caption).foregroundStyle(.secondary)
+            Text(value)
+                .font(.system(.title3, design: .rounded).weight(.bold))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
+            Text(title).font(.caption2).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    @ViewBuilder
+    private var breakdown: some View {
+        if premiums > 0 || fines > 0 {
+            HStack(spacing: 10) {
+                if premiums > 0 {
+                    Label("Премии +\(Money.grouped(premiums)) ₽", systemImage: "star.fill")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.green)
+                }
+                if fines > 0 {
+                    Label("Штрафы −\(Money.grouped(fines)) ₽", systemImage: "exclamationmark.octagon.fill")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.red)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+    }
+
+    private var employeesList: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("По сотрудникам")
+                .font(.headline)
+            ForEach(rows) { pay in
+                HStack(spacing: 10) {
+                    Circle().fill(pay.employee.color).frame(width: 10, height: 10)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(pay.employee.name).font(.callout.weight(.medium))
+                        Text("\(pay.workDays) смен · база \(Money.grouped(pay.baseTotal)) ₽")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 6)
+                    Text("\(Money.grouped(pay.total)) ₽")
+                        .font(.callout.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(pay.total < 0 ? .red : .primary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .background(Color.primary.opacity(0.04),
+                            in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+        }
+    }
+
+    private var summaryText: String {
+        var text = "Turno — \(monthTitle)\n"
+        text += "Выручка: \(Money.grouped(revenue)) ₽\n"
+        text += "Смен: \(shifts) · рабочих дней: \(workDays)\n"
+        text += "К выплате: \(Money.grouped(payrollTotal)) ₽\n"
+        if premiums > 0 { text += "Премии: +\(Money.grouped(premiums)) ₽\n" }
+        if fines > 0 { text += "Штрафы: −\(Money.grouped(fines)) ₽\n" }
+        text += "\n"
+        for pay in rows {
+            text += "\(pay.employee.name): \(pay.workDays) смен — \(Money.grouped(pay.total)) ₽\n"
+        }
+        return text
+    }
+
+    private func copyText() {
+        #if os(macOS)
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(summaryText, forType: .string)
+        #else
+        UIPasteboard.general.string = summaryText
+        #endif
+        Haptics.success()
+        withAnimation(.snappy) { copied = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+            withAnimation(.snappy) { copied = false }
         }
     }
 }

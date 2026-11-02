@@ -25,6 +25,77 @@ enum Money {
     }
 }
 
+// MARK: - Тактильная отдача
+
+/// Лёгкая тактильная отдача на iPhone. На маке — тихий no-op.
+enum Haptics {
+    static func tap() {
+        #if os(iOS)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        #endif
+    }
+
+    static func select() {
+        #if os(iOS)
+        UISelectionFeedbackGenerator().selectionChanged()
+        #endif
+    }
+
+    static func success() {
+        #if os(iOS)
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        #endif
+    }
+
+    static func warning() {
+        #if os(iOS)
+        UINotificationFeedbackGenerator().notificationOccurred(.warning)
+        #endif
+    }
+}
+
+// MARK: - Кнопки с отдачей
+
+/// Кнопка/карточка, которая пружинисто сжимается при нажатии.
+struct PressableButtonStyle: ButtonStyle {
+    var scale: CGFloat = 0.94
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? scale : 1)
+            .opacity(configuration.isPressed ? 0.82 : 1)
+            .animation(.spring(response: 0.24, dampingFraction: 0.7), value: configuration.isPressed)
+    }
+}
+
+// MARK: - Свайп месяцев
+
+/// Горизонтальный свайп по экрану: влево — следующий месяц, вправо — предыдущий.
+/// Вертикальная прокрутка не перехватывается.
+struct MonthSwipe: ViewModifier {
+    let onSwipe: (Int) -> Void
+
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        content.simultaneousGesture(
+            DragGesture(minimumDistance: 18).onEnded { value in
+                let dx = value.translation.width
+                let dy = value.translation.height
+                guard abs(dx) > 50, abs(dx) > abs(dy) * 1.4 else { return }
+                onSwipe(dx < 0 ? 1 : -1)
+            }
+        )
+        #else
+        content
+        #endif
+    }
+}
+
+extension View {
+    func monthSwipe(_ onSwipe: @escaping (Int) -> Void) -> some View {
+        modifier(MonthSwipe(onSwipe: onSwipe))
+    }
+}
+
 // MARK: - Кроссплатформенные алиасы
 
 #if os(macOS)

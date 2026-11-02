@@ -54,7 +54,7 @@ struct RootView: View {
 
     enum Tab: String, CaseIterable, Identifiable {
         case schedule = "График"
-        case day = "День"
+        case day = "Выручка"
         case payroll = "Зарплата"
         case employees = "Сотрудники"
         case settings = "Настройки"
@@ -192,11 +192,13 @@ struct RootView: View {
         HStack(spacing: 4) {
             ForEach(Tab.allCases.filter { $0 != .settings }) { t in
                 SidebarButton(icon: t.icon, title: t.rawValue, selected: tab == t) {
-                    tab = t
+                    Haptics.tap()
+                    withAnimation(.snappy(duration: 0.22)) { tab = t }
                 }
             }
 
             SidebarButton(icon: "gearshape", title: "Настройки", selected: showSettings) {
+                Haptics.tap()
                 showSettings = true
             }
         }
@@ -211,13 +213,17 @@ struct RootView: View {
 
     @ViewBuilder
     private var content: some View {
-        switch tab {
-        case .schedule: ScheduleView()
-        case .day: DayView()
-        case .payroll: PayrollView()
-        case .employees: EmployeesView()
-        case .settings: EmptyView()
+        Group {
+            switch tab {
+            case .schedule: ScheduleView()
+            case .day: DayView()
+            case .payroll: PayrollView()
+            case .employees: EmployeesView()
+            case .settings: EmptyView()
+            }
         }
+        .id(tab)
+        .transition(.opacity)
     }
 
     // MARK: iOS — нижние вкладки
@@ -261,6 +267,7 @@ struct RootView: View {
 /// клик срабатывает на всей площади кнопки.
 struct SidebarPressStyle: ButtonStyle {
     var selected: Bool
+    var hovering: Bool = false
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .foregroundStyle(selected ? Color.primary : Color.secondary)
@@ -269,11 +276,15 @@ struct SidebarPressStyle: ButtonStyle {
                     .fill(
                         selected
                         ? AnyShapeStyle(Color.accentColor.opacity(0.18))
-                        : AnyShapeStyle(configuration.isPressed ? Color.primary.opacity(0.08) : Color.clear)
+                        : AnyShapeStyle(configuration.isPressed
+                                        ? Color.primary.opacity(0.10)
+                                        : (hovering ? Color.primary.opacity(0.06) : Color.clear))
                     )
             )
             .scaleEffect(configuration.isPressed ? 0.94 : 1.0)
-            .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
+            .animation(.spring(response: 0.22, dampingFraction: 0.72),
+                       value: configuration.isPressed)
+            .animation(.easeOut(duration: 0.14), value: hovering)
             .contentShape(Rectangle())
     }
 }
@@ -283,6 +294,8 @@ struct SidebarButton: View {
     let title: String
     let selected: Bool
     let action: () -> Void
+
+    @State private var hovering = false
 
     var body: some View {
         Button(action: action) {
@@ -295,6 +308,7 @@ struct SidebarButton: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 10)
         }
-        .buttonStyle(SidebarPressStyle(selected: selected))
+        .buttonStyle(SidebarPressStyle(selected: selected, hovering: hovering))
+        .onHover { hovering = $0 }
     }
 }
