@@ -1,5 +1,8 @@
 import Foundation
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// Хранилище данных: JSON-файл в ~/Library/Application Support/Turno.
 /// Запись атомарная, при старте — автокопия в папку Backups (последние 10).
@@ -263,12 +266,97 @@ final class Store: ObservableObject {
                               userInfo: [NSLocalizedDescriptionKey: "файл пуст"])
             }
             try importJSON(raw)
+            lastOpenedFile = url.lastPathComponent
+            // Копию из папки Inbox убираем — она больше не нужна.
+            if url.path.contains("/Inbox/") {
+                try? FileManager.default.removeItem(at: url)
+                if pendingInboxFile?.path == url.path { pendingInboxFile = nil }
+            }
         } catch {
+            // Неподходящий файл из Inbox не предлагаем повторно.
+            if url.path.contains("/Inbox/") { rejectedInboxPaths.insert(url.path) }
             showImportMessage(
                 "❌ Файл не подошёл.\nНужен JSON-файл, экспортированный из Turno (Настройки → Данные → Экспорт данных).\nПричина: \(error.localizedDescription)",
                 error: true)
         }
     }
+
+    // MARK: Страховка: файл из шаринга, если событие открытия «потерялось»
+
+    /// Последний открытый файл (диагностика переноса данных).
+    @Published var lastOpenedFile: String?
+
+    /// Файл, найденный в папке Inbox: сюда iOS кладёт открытый в приложение файл,
+    /// даже если событие onOpenURL до приложения не дошло. Показываем баннер-предложение.
+    @Published var pendingInboxFile: URL?
+    /// Файлы Inbox, которые уже не подошли — не предлагаем их повторно.
+    private var rejectedInboxPaths = Set<String>()
+
+    /// Проверка папки Inbox. Вызывается при старте и при каждом возврате приложения
+    /// в активное состояние — это путь «Поделиться → Turno», когда URL-событие потерялось.
+    func scanInbox() {
+        let fm = FileManager.default
+        guard let docs = fm.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let inbox = docs.appendingPathComponent("Inbox", isDirectory: true)
+        guard let items = try? fm.contentsOfDirectory(
+            at: inbox, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
+        let candidates = items.filter {
+            !rejectedInboxPaths.contains($0.path) &&
+            ($0.pathExtension.lowercased() == "json" || $0.lastPathComponent.lowercased().contains("turno"))
+        }
+        guard let newest = candidates.max(by: { a, b in
+            let da = (try? a.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            let db = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            return da < db
+        }) else { return }
+        if pendingInboxFile?.path != newest.path {
+            pendingInboxFile = newest
+            lastOpenedFile = newest.lastPathComponent
+        }
+    }
+
+    /// Пользователь нажал на баннер с найденным файлом — импортируем его.
+    func acceptPendingInboxFile() {
+        guard let url = pendingInboxFile else { return }
+        pendingInboxFile = nil
+        importFromFile(url: url)
+    }
+
+    /// Открытие файла из шаринга/«Открыть в Turno» — основной путь; Inbox — страховка.
+    func handleOpenedURL(_ url: URL) {
+        guard url.isFileURL else { return }
+        lastOpenedFile = url.lastPathComponent
+        // Если этот же файл уже показан как найденный в Inbox — баннер снимаем,
+        // импорт идёт по URL, дублировать не нужно.
+        if pendingInboxFile?.path == url.path { pendingInboxFile = nil }
+        // Файл уже обработан и удалён (например, принят из Inbox) — молча выходим.
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        importFromFile(url: url)
+    }
+
+    #if os(iOS)
+    /// Импорт из буфера обмена: в Файлах «Поделиться → Копировать» → здесь вставить.
+    /// Работает всегда, даже когда система не отдаёт файл приложению.
+    func importFromPasteboard() {
+        let pb = UIPasteboard.general
+        if let url = pb.urls?.first {
+            importFromFile(url: url)
+            return
+        }
+        if let text = pb.string, text.contains("{"), let raw = text.data(using: .utf8) {
+            do { try importJSON(raw) }
+            catch {
+                showImportMessage(
+                    "❌ В буфере обмена есть текст, но это не данные Turno.\nПричина: \(error.localizedDescription)",
+                    error: true)
+            }
+            return
+        }
+        showImportMessage(
+            "❌ В буфере обмена нет файла данных.\nСкопируйте его в Файлах: файл → Поделиться → Копировать — и повторите.",
+            error: true)
+    }
+    #endif
 
     private func showImportMessage(_ text: String, error: Bool) {
         importMessage = text

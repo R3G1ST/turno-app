@@ -35,6 +35,11 @@ struct TurnoApp: App {
             RootView()
                 .environmentObject(store)
                 .environmentObject(updater)
+                // Приём файла («Поделиться → Turno») — на самом корне дерева вьюх,
+                // чтобы событие открытия не терялось где-то внутри вкладок.
+                .onOpenURL { url in
+                    store.handleOpenedURL(url)
+                }
         }
         #endif
     }
@@ -43,6 +48,7 @@ struct TurnoApp: App {
 struct RootView: View {
     @EnvironmentObject var store: Store
     @EnvironmentObject var updater: Updater
+    @Environment(\.scenePhase) private var scenePhase
     @State private var tab: Tab = .schedule
     @State private var showSettings = false
 
@@ -65,10 +71,23 @@ struct RootView: View {
     }
 
     var body: some View {
+        rootContent
+            .overlay(alignment: .top) { importBanner }
+            // Страховка на случай, если событие открытия файла потерялось:
+            // проверяем папку Inbox при появлении экрана и при каждом возврате
+            // приложения из фона (туда iOS кладёт открытый файл).
+            .onAppear { store.scanInbox() }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active { store.scanInbox() }
+            }
+    }
+
+    @ViewBuilder
+    private var rootContent: some View {
         #if os(macOS)
-        macBody.overlay(alignment: .top) { importBanner }
+        macBody
         #else
-        iosBody.overlay(alignment: .top) { importBanner }
+        iosBody
         #endif
     }
 
@@ -78,34 +97,55 @@ struct RootView: View {
     private var importBanner: some View {
         Group {
             if let msg = store.importMessage {
-                VStack(spacing: 6) {
-                    Label(store.importMessageHasError ? "Импорт не удался" : "Импорт данных",
-                          systemImage: store.importMessageHasError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                        .font(.headline)
-                    Text(msg)
-                        .font(.callout)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .multilineTextAlignment(.center)
-                    Text("Нажмите, чтобы закрыть")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 18)
-                .padding(.vertical, 14)
-                .frame(maxWidth: 460)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16)
-                        .strokeBorder(store.importMessageHasError ? Color.red.opacity(0.5) : Color.green.opacity(0.5))
-                )
-                .shadow(radius: 12, y: 4)
-                .padding(.top, 10)
-                .onTapGesture { store.importMessage = nil }
-                .transition(.move(edge: .top).combined(with: .opacity))
-                .zIndex(999)
+                bannerCard(
+                    title: store.importMessageHasError ? "Импорт не удался" : "Импорт данных",
+                    icon: store.importMessageHasError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill",
+                    text: msg,
+                    hint: "Нажмите, чтобы закрыть",
+                    error: store.importMessageHasError
+                ) { store.importMessage = nil }
+            } else if let file = store.pendingInboxFile {
+                // Файл дошёл до папки приложения, но событие открытия не сработало.
+                bannerCard(
+                    title: "Найден файл данных",
+                    icon: "doc.badge.gearshape",
+                    text: "Файл «\(file.lastPathComponent)» поступил в Turno.\nНажмите, чтобы импортировать данные.",
+                    hint: "Нажмите, чтобы импортировать",
+                    error: false
+                ) { store.acceptPendingInboxFile() }
             }
         }
         .animation(.spring(duration: 0.3), value: store.importMessage)
+        .animation(.spring(duration: 0.3), value: store.pendingInboxFile)
+    }
+
+    private func bannerCard(title: String, icon: String, text: String,
+                            hint: String, error: Bool, action: @escaping () -> Void) -> some View {
+        VStack(spacing: 6) {
+            Label(title, systemImage: icon)
+                .font(.headline)
+            Text(text)
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+                .multilineTextAlignment(.center)
+            Text(hint)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
+        .frame(maxWidth: 460)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .strokeBorder(error ? Color.red.opacity(0.5) : Color.green.opacity(0.5))
+        )
+        .shadow(radius: 12, y: 4)
+        .padding(.top, 10)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: action)
+        .transition(.move(edge: .top).combined(with: .opacity))
+        .zIndex(999)
     }
 
     /// После успешного импорта сразу показываем календарь с данными.
@@ -199,11 +239,8 @@ struct RootView: View {
                 .tabItem { Label("Настройки", systemImage: Tab.settings.icon) }
                 .tag(Tab.settings)
         }
-        // Импорт данных файлом: «Поделиться → Turno» или «Открыть в Turno» из Файлов.
-        .onOpenURL { url in
-            guard url.isFileURL else { return }
-            store.importFromFile(url: url)
-        }
+        // Приём файла из шаринга теперь на корне WindowGroup (см. выше) —
+        // здесь остаётся только реакция на результат импорта.
         .onChange(of: store.importMessage) { _, msg in
             if msg != nil { focusAfterImport() }
         }

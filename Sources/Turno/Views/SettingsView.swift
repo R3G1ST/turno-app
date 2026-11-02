@@ -220,6 +220,21 @@ struct SettingsView: View {
                 } label: { Label("Импорт данных", systemImage: "square.and.arrow.down") }
             }
 
+            #if os(iOS)
+            Divider()
+            Button {
+                store.importFromPasteboard()
+            } label: { Label("Импорт из буфера обмена", systemImage: "doc.on.clipboard") }
+
+            Text("Если «Поделиться → Turno» не сработал: в Файлах откройте файл → Поделиться → Копировать, затем нажмите здесь.")
+                .font(.caption2).foregroundStyle(.secondary)
+
+            if let last = store.lastOpenedFile {
+                Text("Последний открытый файл: \(last)")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            #endif
+
             if let transferMsg {
                 Text(transferMsg)
                     .font(.caption)
