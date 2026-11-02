@@ -80,6 +80,14 @@ struct RootView: View {
             .onChange(of: scenePhase) { _, phase in
                 if phase == .active { store.scanInbox() }
             }
+            // Файл может оказаться в папке чуть позже появления экрана
+            // (система докладывает его во время открытия) — перепроверяем.
+            .task {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                store.scanInbox()
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                store.scanInbox()
+            }
     }
 
     @ViewBuilder

@@ -226,8 +226,19 @@ struct SettingsView: View {
                 store.importFromPasteboard()
             } label: { Label("Импорт из буфера обмена", systemImage: "doc.on.clipboard") }
 
-            Text("Если «Поделиться → Turno» не сработал: в Файлах откройте файл → Поделиться → Копировать, затем нажмите здесь.")
+            Button {
+                store.scanInbox()
+                if store.pendingInboxFile == nil {
+                    transferMsg = "В папке Turno файлов нет. Положите JSON туда: в Файлах — файл → ⋯ → Переместить → На моём iPhone → Turno."
+                    transferMsgHasError = false
+                } else {
+                    transferMsg = nil
+                }
+            } label: { Label("Импорт из папки приложения", systemImage: "folder") }
+
+            Text("Если «Поделиться → Turno» не работает, есть два гарантированных пути:\n1) Файлы → файл → Поделиться → Копировать → здесь «Импорт из буфера обмена».\n2) Файлы → файл → ⋯ → Переместить → На моём iPhone → Turno → здесь «Импорт из папки приложения» (или просто откройте Turno — баннер найдёт файл сам).")
                 .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             if let last = store.lastOpenedFile {
                 Text("Последний открытый файл: \(last)")

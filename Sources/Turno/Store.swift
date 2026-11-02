@@ -232,6 +232,15 @@ final class Store: ObservableObject {
 
     /// Импорт данных из JSON-файла (перезаписывает текущие; перед этим старые сохраняются в бэкап).
     func importJSON(_ raw: Data) throws {
+        // Файл должен быть экспортом Turno — ищем характерные ключи.
+        // Иначе любой посторонний JSON (случайно выбранный) декодировался бы
+        // как «пустые данные» и затёр текущие.
+        guard let obj = try? JSONSerialization.jsonObject(with: raw),
+              let dict = obj as? [String: Any],
+              dict["employees"] != nil || dict["shifts"] != nil || dict["revenues"] != nil else {
+            throw NSError(domain: "Turno", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "в файле нет данных Turno"])
+        }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .deferredToDate
         let decoded = try decoder.decode(AppData.self, from: raw)
@@ -270,11 +279,29 @@ final class Store: ObservableObject {
             // Копию из папки Inbox убираем — она больше не нужна.
             if url.path.contains("/Inbox/") {
                 try? FileManager.default.removeItem(at: url)
-                if pendingInboxFile?.path == url.path { pendingInboxFile = nil }
+                if samePath(pendingInboxFile, url) { pendingInboxFile = nil }
+            } else if isInImportFolder(url) {
+                // Файл из папки Turno помечаем обработанным (переименовываем),
+                // чтобы баннер не предлагал его при каждом запуске. Сам файл остаётся.
+                if url.pathExtension.lowercased() != "imported" {
+                    let done = url.deletingPathExtension().appendingPathExtension("imported")
+                    try? FileManager.default.removeItem(at: done)
+                    try? FileManager.default.moveItem(at: url, to: done)
+                }
+                if samePath(pendingInboxFile, url) { pendingInboxFile = nil }
             }
         } catch {
-            // Неподходящий файл из Inbox не предлагаем повторно.
-            if url.path.contains("/Inbox/") { rejectedInboxPaths.insert(url.path) }
+            // Не подошёл — помечаем файл, чтобы баннер не предлагал его снова
+            // при каждом запуске. Сам файл остаётся на месте.
+            let ext = url.pathExtension.lowercased()
+            if isInImportFolder(url), ext != "rejected", ext != "imported" {
+                let bad = url.deletingPathExtension().appendingPathExtension("rejected")
+                try? FileManager.default.removeItem(at: bad)
+                try? FileManager.default.moveItem(at: url, to: bad)
+            } else if url.path.contains("/Inbox/") {
+                rejectedInboxPaths.insert(url.path)
+            }
+            if samePath(pendingInboxFile, url) { pendingInboxFile = nil }
             showImportMessage(
                 "❌ Файл не подошёл.\nНужен JSON-файл, экспортированный из Turno (Настройки → Данные → Экспорт данных).\nПричина: \(error.localizedDescription)",
                 error: true)
@@ -292,24 +319,46 @@ final class Store: ObservableObject {
     /// Файлы Inbox, которые уже не подошли — не предлагаем их повторно.
     private var rejectedInboxPaths = Set<String>()
 
-    /// Проверка папки Inbox. Вызывается при старте и при каждом возврате приложения
-    /// в активное состояние — это путь «Поделиться → Turno», когда URL-событие потерялось.
+    /// Папки, в которых ищем файл для импорта. Только iOS:
+    /// — Inbox: системная копия документа, открытого в приложение;
+    /// — корень Documents: папка Turno, видимая в «Файлах» (UIFileSharingEnabled),
+    ///   куда файл кладут вручную («Переместить → На моём iPhone → Turno»).
+    /// На маке пусто — сканировать ~/Documents нельзя, там чужие файлы.
+    static var importScanFolders: [URL] = {
+        #if os(iOS)
+        guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return [] }
+        return [docs.appendingPathComponent("Inbox", isDirectory: true), docs]
+        #else
+        return []
+        #endif
+    }()
+
+    /// Проверка папок с файлом. Вызывается при старте, при возврате из фона
+    /// и по кнопке в Настройках — это путь, когда события открытия не работают.
     func scanInbox() {
         let fm = FileManager.default
-        guard let docs = fm.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
-        let inbox = docs.appendingPathComponent("Inbox", isDirectory: true)
-        guard let items = try? fm.contentsOfDirectory(
-            at: inbox, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
-        let candidates = items.filter {
-            !rejectedInboxPaths.contains($0.path) &&
-            ($0.pathExtension.lowercased() == "json" || $0.lastPathComponent.lowercased().contains("turno"))
+        var candidates: [URL] = []
+        for folder in Store.importScanFolders {
+            guard let items = try? fm.contentsOfDirectory(
+                at: folder, includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey]) else { continue }
+            for item in items {
+                let isDir = (try? item.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+                if isDir { continue }
+                if item.lastPathComponent == "turno.json" { continue }   // свои данные не трогаем
+                if rejectedInboxPaths.contains(item.path) { continue }
+                let ext = item.pathExtension.lowercased()
+                if ext == "imported" || ext == "rejected" { continue }   // уже обработан
+                if ext == "json" || item.lastPathComponent.lowercased().contains("turno") {
+                    candidates.append(item)
+                }
+            }
         }
         guard let newest = candidates.max(by: { a, b in
             let da = (try? a.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
             let db = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
             return da < db
         }) else { return }
-        if pendingInboxFile?.path != newest.path {
+        if !samePath(pendingInboxFile, newest) {
             pendingInboxFile = newest
             lastOpenedFile = newest.lastPathComponent
         }
@@ -328,7 +377,7 @@ final class Store: ObservableObject {
         lastOpenedFile = url.lastPathComponent
         // Если этот же файл уже показан как найденный в Inbox — баннер снимаем,
         // импорт идёт по URL, дублировать не нужно.
-        if pendingInboxFile?.path == url.path { pendingInboxFile = nil }
+        if samePath(pendingInboxFile, url) { pendingInboxFile = nil }
         // Файл уже обработан и удалён (например, принят из Inbox) — молча выходим.
         guard FileManager.default.fileExists(atPath: url.path) else { return }
         importFromFile(url: url)
@@ -361,6 +410,20 @@ final class Store: ObservableObject {
     private func showImportMessage(_ text: String, error: Bool) {
         importMessage = text
         importMessageHasError = error
+    }
+
+    /// Лежит ли файл в одной из папок импорта (на маке их нет — файлы не трогаем).
+    /// Пути сравниваются через resolvingSymlinksInPath: contentsOfDirectory может
+    /// вернуть /private/tmp/…, а заданный нами путь — /tmp/… (симлинк).
+    private func isInImportFolder(_ url: URL) -> Bool {
+        let path = url.resolvingSymlinksInPath().path
+        return Store.importScanFolders.contains { path.hasPrefix($0.resolvingSymlinksInPath().path + "/") }
+    }
+
+    /// Равны ли два пути файла (с учётом симлинков).
+    private func samePath(_ a: URL?, _ b: URL?) -> Bool {
+        guard let a, let b else { return false }
+        return a.resolvingSymlinksInPath().path == b.resolvingSymlinksInPath().path
     }
 
     private func pruneBackups(keep: Int = 10) {
