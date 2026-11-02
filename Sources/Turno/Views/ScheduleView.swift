@@ -80,6 +80,10 @@ struct ScheduleView: View {
                 .padding(.bottom, 20)
             }
         }
+        #if os(iOS)
+        // Свайп влево/вправо по календарю листает месяцы (вместо стрелок).
+        .simultaneousGesture(monthSwipeGesture)
+        #endif
         .sheet(isPresented: $showTemplates) {
             TemplatesSheet(month: month)
                 .environmentObject(store)
@@ -136,28 +140,23 @@ struct ScheduleView: View {
     }
 
     /// Компактная шапка под узкий экран телефона: две строки, иконки без подписей.
+    /// Месяц листается свайпом по календарю, поэтому стрелок нет.
     private var compactHeader: some View {
         VStack(spacing: 6) {
-            HStack(spacing: 4) {
-                Button { shiftMonth(-1) } label: {
-                    Image(systemName: "chevron.left").font(.body.weight(.semibold))
-                }
-                Text(monthTitle)
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                Button { shiftMonth(1) } label: {
-                    Image(systemName: "chevron.right").font(.body.weight(.semibold))
-                }
-            }
-            .buttonStyle(.borderless)
+            Text(monthTitle)
+                .font(.headline)
+                .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
 
-            HStack(spacing: 18) {
+            HStack(spacing: 12) {
                 Button { month = cal.startOfDay(for: Date()) } label: {
                     Text("Сегодня").font(.subheadline.weight(.medium))
                 }
                 .buttonStyle(.borderless)
 
-                Spacer()
+                monthRevenueLabel
+
+                Spacer(minLength: 4)
 
                 Button {
                     copyScheduleAsImage()
@@ -179,6 +178,20 @@ struct ScheduleView: View {
         .background(.ultraThinMaterial)
     }
 
+    /// Выручка за показанный месяц — короткий вариант для телефона.
+    private var monthRevenueLabel: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "banknote").font(.caption2)
+            Text("Выручка \(Money.grouped(monthRevenue)) ₽")
+                .font(.caption.weight(.semibold))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+        .foregroundStyle(monthRevenue > 0 ? Color.green : Color.secondary)
+        .accessibilityLabel("Выручка за месяц \(Money.grouped(monthRevenue)) рублей")
+    }
+
     private var macHeader: some View {
         HStack(spacing: 12) {
             Button { shiftMonth(-1) } label: { Image(systemName: "chevron.left") }
@@ -190,6 +203,17 @@ struct ScheduleView: View {
                 .buttonStyle(.borderless)
             Button("Сегодня") { month = cal.startOfDay(for: Date()) }
                 .buttonStyle(.borderless)
+
+            Divider().frame(height: 18)
+
+            HStack(spacing: 5) {
+                Image(systemName: "banknote").font(.caption)
+                Text("Выручка за месяц: \(Money.grouped(monthRevenue)) ₽")
+                    .font(.callout.weight(.medium))
+                    .monospacedDigit()
+            }
+            .foregroundStyle(monthRevenue > 0 ? Color.green : Color.secondary)
+            .help("Сумма выручки за все дни показанного месяца")
 
             Spacer()
 
@@ -228,6 +252,26 @@ struct ScheduleView: View {
     private func shiftMonth(_ delta: Int) {
         if let d = cal.date(byAdding: .month, value: delta, to: month) { month = d }
     }
+
+    /// Суммарная выручка за показанный месяц.
+    private var monthRevenue: Double { store.monthRevenue(month) }
+
+#if os(iOS)
+    /// Свайп по календарю: влево — следующий месяц, вправо — предыдущий.
+    /// Срабатывает только на явно горизонтальном движении, чтобы не мешать
+    /// вертикальной прокрутке сетки.
+    private var monthSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 18)
+            .onEnded { value in
+                let dx = value.translation.width
+                let dy = value.translation.height
+                guard abs(dx) > 50, abs(dx) > abs(dy) * 1.4 else { return }
+                withAnimation(.snappy(duration: 0.28)) {
+                    shiftMonth(dx < 0 ? 1 : -1)
+                }
+            }
+    }
+#endif
 
     // MARK: Копирование графика как изображения
 

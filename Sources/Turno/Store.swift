@@ -483,6 +483,17 @@ final class Store: ObservableObject {
         data.revenues[Keys.day(date)] ?? DayRevenue()
     }
 
+    /// Суммарная выручка заведения за месяц (сумма всех дней с введённой выручкой).
+    func monthRevenue(_ month: Date) -> Double {
+        let cal = Calendar.current
+        guard let interval = cal.dateInterval(of: .month, for: month) else { return 0 }
+        return data.revenues.reduce(0) { sum, item in
+            guard let d = Keys.date(fromDayKey: item.key),
+                  d >= interval.start, d < interval.end else { return sum }
+            return sum + item.value.total
+        }
+    }
+
     /// Месяц с последней активностью (смены, выручка, премии, штрафы).
     /// Используется как стартовый месяц в календаре и ведомости, чтобы
     /// приложение открывалось там, где есть данные (не слепо на текущем).

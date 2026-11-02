@@ -6,6 +6,25 @@ import AppKit
 import UIKit
 #endif
 
+// MARK: - Форматирование сумм
+
+/// Единое форматирование денег: «245 000» (с пробелами между разрядами).
+enum Money {
+    private static let formatter: NumberFormatter = {
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        f.locale = Locale(identifier: "ru_RU")
+        f.groupingSeparator = " "
+        f.usesGroupingSeparator = true
+        f.maximumFractionDigits = 0
+        return f
+    }()
+
+    static func grouped(_ value: Double) -> String {
+        formatter.string(from: NSNumber(value: value.rounded())) ?? String(Int(value.rounded()))
+    }
+}
+
 // MARK: - Кроссплатформенные алиасы
 
 #if os(macOS)
