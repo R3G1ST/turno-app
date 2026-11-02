@@ -45,7 +45,7 @@ struct ScheduleView: View {
     /// Высота ячейки: на телефоне компактнее, чтобы месяц целиком помещался.
     private var cellHeight: CGFloat {
 #if os(iOS)
-        86
+        96
 #else
         110
 #endif
@@ -306,11 +306,24 @@ struct DayCell: View {
     /// Высота ячейки — компактнее на телефоне.
     private var cellHeight: CGFloat {
 #if os(iOS)
-        86
+        96
 #else
         110
 #endif
     }
+
+    /// Параметры чипов с именами: на телефоне ячейка ~48 pt шириной,
+    /// поэтому имя важнее иконки роли — шрифт меньше, но с автоподгонкой,
+    /// чтобы имя читалось целиком, а не обрезалось до буквы.
+#if os(iOS)
+    private let chipFont: CGFloat = 9
+    private let chipSpacing: CGFloat = 2
+    private let chipHPad: CGFloat = 4
+#else
+    private let chipFont: CGFloat = 10
+    private let chipSpacing: CGFloat = 3
+    private let chipHPad: CGFloat = 6
+#endif
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -325,14 +338,11 @@ struct DayCell: View {
                             Circle().fill(isToday ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.clear))
                         )
                     Spacer()
+                    #if os(macOS)
                     if revenue.total > 0 {
-                        Text("\(Int(revenue.total / 1000))k")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(Capsule().fill(.black.opacity(0.30)))
+                        revenueCapsule
                     }
+                    #endif
                 }
 
                 if workers.isEmpty {
@@ -341,11 +351,17 @@ struct DayCell: View {
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
-                    Spacer(minLength: 0)
                 } else {
                     chips
-                    Spacer(minLength: 0)
                 }
+                #if os(iOS)
+                // В узкой ячейке телефона капсула выручки не влезает в ряд с числом
+                // дня (текст заворачивался в столбик) — показываем её отдельной строкой.
+                if revenue.total > 0 {
+                    revenueCapsule
+                }
+                #endif
+                Spacer(minLength: 0)
             }
             .padding(7)
         }
@@ -362,6 +378,18 @@ struct DayCell: View {
         .contentShape(RoundedRectangle(cornerRadius: 12))
         .opacity(isOtherMonth ? 0.4 : 1)
         .help(helpText())
+    }
+
+    /// Капсула выручки дня («15k»).
+    private var revenueCapsule: some View {
+        Text("\(Int(revenue.total / 1000))k")
+            .font(.system(size: 9, weight: .bold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(Capsule().fill(.black.opacity(0.30)))
+            .lineLimit(1)
+            .fixedSize()
     }
 
     // MARK: Цветные полосы по сотрудникам
@@ -405,17 +433,20 @@ struct DayCell: View {
     // MARK: Чипы с именами
 
     private var chips: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: chipSpacing) {
             ForEach(workers.prefix(3), id: \.emp.id) { w in
                 HStack(spacing: 3) {
+                    #if os(macOS)
                     Image(systemName: w.emp.role.icon)
                         .font(.system(size: 8, weight: .bold))
+                    #endif
                     Text(w.emp.name)
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.system(size: chipFont, weight: .semibold))
                         .lineLimit(1)
+                        .minimumScaleFactor(0.55)
                 }
                 .foregroundStyle(.white)
-                .padding(.horizontal, 6)
+                .padding(.horizontal, chipHPad)
                 .padding(.vertical, 2)
                 .background(Capsule().fill(w.emp.color.gradient))
             }
