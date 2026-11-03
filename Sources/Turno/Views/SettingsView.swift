@@ -46,20 +46,14 @@ struct SettingsView: View {
             .padding(.top, 12)
             .padding(.bottom, 4)
 
-            #if os(iOS)
-            // На телефоне вкладки прокручиваются: контент выше экрана.
+            // Прокрутка нужна на обеих платформах: порогов может быть много,
+            // и без неё SwiftUI сжимает шапку с вкладками до нулевой высоты.
             ScrollView {
                 tabContent
                     .padding(.horizontal, 16)
                     .padding(.top, 10)
                     .padding(.bottom, 32)
             }
-            #else
-            tabContent
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .padding(.horizontal, 18)
-                .padding(.bottom, 18)
-            #endif
         }
         #if os(macOS)
         .frame(width: 700, height: 620)
