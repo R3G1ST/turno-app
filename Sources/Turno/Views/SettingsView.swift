@@ -568,31 +568,38 @@ struct SettingsView: View {
                     Haptics.tap()
                     sync.syncNow()
                 } label: {
-                    Label("Слить", systemImage: "arrow.triangle.2.circlepath")
+                    Label("Синхронизировать сейчас", systemImage: "arrow.triangle.2.circlepath")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
 
-                Button {
-                    Haptics.select()
-                    pendingDirection = .download
-                } label: {
-                    Label("Скачать", systemImage: "arrow.down.circle")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
+                Menu {
+                    Button(role: .destructive) {
+                        Haptics.select()
+                        pendingDirection = .download
+                    } label: {
+                        Label("Скачать с GitHub", systemImage: "arrow.down.circle")
+                    }
 
-                Button {
-                    Haptics.select()
-                    pendingDirection = .upload
+                    Button(role: .destructive) {
+                        Haptics.select()
+                        pendingDirection = .upload
+                    } label: {
+                        Label("Загрузить на GitHub", systemImage: "arrow.up.circle")
+                    }
                 } label: {
-                    Label("Загрузить", systemImage: "arrow.up.circle")
-                        .frame(maxWidth: .infinity)
+                    Label("Дополнительно…", systemImage: "ellipsis.circle")
                 }
-                .buttonStyle(.bordered)
+                .help("Аварийные действия: полностью заменить данные этого устройства или GitHub")
+                .fixedSize()
             }
             .font(.callout.weight(.medium))
             .controlSize(.small)
+
+            Text("Обычно нажимать ничего не нужно: изменения уходят автоматически, а эта кнопка просто запускает обмен прямо сейчас.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(12)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
