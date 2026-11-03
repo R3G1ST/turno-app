@@ -4,6 +4,7 @@ import SwiftUI
 struct TurnoApp: App {
     @StateObject private var store = Store()
     @StateObject private var updater = Updater()
+    @StateObject private var sync = SyncManager()
 
     var body: some Scene {
         #if os(macOS)
@@ -11,6 +12,7 @@ struct TurnoApp: App {
             RootView()
                 .environmentObject(store)
                 .environmentObject(updater)
+                .environmentObject(sync)
                 .frame(minWidth: 1100, minHeight: 680)
         }
         .windowStyle(.hiddenTitleBar)
@@ -29,12 +31,14 @@ struct TurnoApp: App {
             SettingsView()
                 .environmentObject(store)
                 .environmentObject(updater)
+                .environmentObject(sync)
         }
         #else
         WindowGroup {
             RootView()
                 .environmentObject(store)
                 .environmentObject(updater)
+                .environmentObject(sync)
                 // Приём файла («Поделиться → Turno») — на самом корне дерева вьюх,
                 // чтобы событие открытия не терялось где-то внутри вкладок.
                 .onOpenURL { url in
@@ -48,6 +52,7 @@ struct TurnoApp: App {
 struct RootView: View {
     @EnvironmentObject var store: Store
     @EnvironmentObject var updater: Updater
+    @EnvironmentObject var sync: SyncManager
     @Environment(\.scenePhase) private var scenePhase
     @State private var tab: Tab = .schedule
     @State private var showSettings = false
@@ -77,8 +82,15 @@ struct RootView: View {
             // проверяем папку Inbox при появлении экрана и при каждом возврате
             // приложения из фона (туда iOS кладёт открытый файл).
             .onAppear { store.scanInbox() }
+            .task {
+                sync.configure(store: store)
+                sync.appDidBecomeActive()
+            }
             .onChange(of: scenePhase) { _, phase in
-                if phase == .active { store.scanInbox() }
+                if phase == .active {
+                    store.scanInbox()
+                    sync.appDidBecomeActive()
+                }
             }
             // Файл может оказаться в папке чуть позже появления экрана
             // (система докладывает его во время открытия) — перепроверяем.
@@ -208,6 +220,7 @@ struct RootView: View {
             SettingsView()
                 .environmentObject(store)
                 .environmentObject(updater)
+                .environmentObject(sync)
         }
     }
 
@@ -250,6 +263,7 @@ struct RootView: View {
             SettingsView()
                 .environmentObject(store)
                 .environmentObject(updater)
+                .environmentObject(sync)
                 .tabItem { Label("Настройки", systemImage: Tab.settings.icon) }
                 .tag(Tab.settings)
         }

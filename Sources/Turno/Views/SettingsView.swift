@@ -6,19 +6,28 @@ import AppKit
 
 // MARK: - Настройки: пороги надбавок, бэкап, обновления
 
+/// Направление ручной синхронизации с GitHub (с подтверждением).
+private enum SyncDirection {
+    case download
+    case upload
+}
+
 struct SettingsView: View {
     @EnvironmentObject var store: Store
     @EnvironmentObject var updater: Updater
+    @EnvironmentObject var sync: SyncManager
     @Environment(\.dismiss) private var dismiss
     @State private var backupMsg: String?
     @State private var tab: Tab = .thresholds
     @State private var showImport = false
     @State private var transferMsg: String?
     @State private var transferMsgHasError = false
+    @State private var pendingDirection: SyncDirection?
 
     enum Tab: String, CaseIterable, Identifiable {
         case thresholds = "Надбавки"
         case data = "Данные"
+        case sync = "Связь"
         case updates = "Обновления"
         var id: String { rawValue }
     }
@@ -53,8 +62,25 @@ struct SettingsView: View {
             #endif
         }
         #if os(macOS)
-        .frame(width: 660, height: 520)
+        .frame(width: 700, height: 620)
         #endif
+        .confirmationDialog(confirmationTitle, isPresented: Binding(
+            get: { pendingDirection != nil },
+            set: { if !$0 { pendingDirection = nil } }
+        ), titleVisibility: .visible) {
+            Button(confirmationButton) {
+                let direction = pendingDirection
+                pendingDirection = nil
+                switch direction {
+                case .download: sync.downloadNow()
+                case .upload: sync.uploadNow()
+                case nil: break
+                }
+            }
+            Button("Отмена", role: .cancel) { pendingDirection = nil }
+        } message: {
+            Text(confirmationMessage)
+        }
         .fileImporter(isPresented: $showImport,
                       // .item — принимаем файл любого типа: мессенджеры/AirDrop могут
                       // снять расширение или переименовать, а фильтр по .json тогда
@@ -81,7 +107,35 @@ struct SettingsView: View {
         switch tab {
         case .thresholds: thresholdsTab
         case .data: dataTab
+        case .sync: syncTab
         case .updates: updatesTab
+        }
+    }
+
+    private var confirmationTitle: String {
+        switch pendingDirection {
+        case .download: return "Заменить данные на этом устройстве?"
+        case .upload: return "Сделать эти данные главными?"
+        case nil: return ""
+        }
+    }
+
+    private var confirmationButton: String {
+        switch pendingDirection {
+        case .download: return "Скачать с GitHub"
+        case .upload: return "Загрузить на GitHub"
+        case nil: return ""
+        }
+    }
+
+    private var confirmationMessage: String {
+        switch pendingDirection {
+        case .download:
+            return "Текущие данные будут заменены копией из GitHub. Перед заменой автоматически создаётся резервная копия в Backups."
+        case .upload:
+            return "Данные с этого устройства перезапишут файл в GitHub. Записи, которых здесь нет, будут удалены и на другом устройстве. Перед отправкой создаётся резервная копия."
+        case nil:
+            return ""
         }
     }
 
@@ -446,6 +500,223 @@ struct SettingsView: View {
         .padding(12)
         .background(.regularMaterial,
                     in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    // MARK: Связь
+
+    private var syncTab: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Синхронизация Mac ↔ iPhone")
+                        .font(.headline)
+                    Text("Два независимых канала: GitHub и прямой Wi-Fi. Данные сливаются по записям — свежая правка побеждает, удаления не воскресают.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 4)
+                if sync.isSyncing {
+                    ProgressView().controlSize(.small)
+                }
+            }
+
+            githubCard
+            wifiCard
+            syncStatus
+
+            Text("Токен и код Wi-Fi хранятся только на устройстве и не попадают в файл синхронизации. На Mac и iPhone нужны одинаковые токен и код.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            #if os(macOS)
+            Spacer(minLength: 0)
+            #endif
+        }
+        .onAppear { sync.refreshWiFi() }
+    }
+
+    private var githubCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Label("GitHub", systemImage: "chevron.left.forwardslash.chevron.right")
+                    .font(.callout.weight(.semibold))
+                Spacer()
+                Toggle("Авто", isOn: $sync.autoGitHub)
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .help("Синхронизировать при запуске, возврате в приложение и после изменений")
+            }
+
+            VStack(spacing: 6) {
+                TextField("Репозиторий: R3G1ST/turno-sync", text: $sync.githubRepo)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.callout)
+                    #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    #endif
+                SecureField("Fine-grained token (Contents: Read and write)", text: $sync.githubToken)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.callout)
+                    #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    #endif
+            }
+
+            HStack(spacing: 8) {
+                Button {
+                    Haptics.tap()
+                    sync.syncNow()
+                } label: {
+                    Label("Слить", systemImage: "arrow.triangle.2.circlepath")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button {
+                    Haptics.select()
+                    pendingDirection = .download
+                } label: {
+                    Label("Скачать", systemImage: "arrow.down.circle")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    Haptics.select()
+                    pendingDirection = .upload
+                } label: {
+                    Label("Загрузить", systemImage: "arrow.up.circle")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+            }
+            .font(.callout.weight(.medium))
+            .controlSize(.small)
+        }
+        .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.05), lineWidth: 1)
+        )
+    }
+
+    private var wifiCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Label("Wi-Fi напрямую", systemImage: "wifi")
+                    .font(.callout.weight(.semibold))
+                Spacer()
+                Toggle("Включено", isOn: $sync.wifiEnabled)
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+            }
+
+            #if os(macOS)
+            HStack(alignment: .center, spacing: 10) {
+                Text("Код для iPhone:")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(sync.wifiCode)
+                    .font(.system(.title3, design: .monospaced).weight(.bold))
+                    .tracking(2)
+                    .textSelection(.enabled)
+                Button("Новый код") {
+                    Haptics.tap()
+                    sync.regenerateWiFiCode()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                Spacer(minLength: 0)
+                Label(sync.server.isRunning ? "Приём включён" : "Приём выключен",
+                      systemImage: sync.server.isRunning ? "dot.radiowaves.left.and.right" : "pause.circle")
+                    .font(.caption2)
+                    .foregroundStyle(sync.server.isRunning ? .green : .secondary)
+            }
+            Text(sync.server.status)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            if let last = sync.server.lastClientAt {
+                Text("Последнее подключение: \(last.formatted(date: .omitted, time: .shortened))")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            #else
+            HStack(spacing: 8) {
+                Text("Код с Mac:")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextField("000000", text: $sync.wifiCode)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+                    .keyboardType(.numberPad)
+                    .frame(maxWidth: 110)
+                Button("Найти Mac") {
+                    Haptics.tap()
+                    sync.refreshWiFi()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                Spacer(minLength: 0)
+            }
+
+            Text(sync.browser.status)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            ForEach(sync.browser.peers) { peer in
+                Button {
+                    Haptics.select()
+                    sync.syncWiFi(to: peer)
+                } label: {
+                    HStack {
+                        Image(systemName: "laptopcomputer")
+                        Text(peer.name).lineLimit(1)
+                        Spacer()
+                        Text("Синхронизировать")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+            }
+
+            Toggle("Искать Mac при открытии настроек", isOn: $sync.wifiAuto)
+                .font(.caption2)
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+            #endif
+        }
+        .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.05), lineWidth: 1)
+        )
+    }
+
+    private var syncStatus: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            if let error = sync.lastError {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Label(sync.statusMessage, systemImage: "arrow.triangle.2.circlepath")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Text("Последняя успешная синхронизация: \(sync.lastSyncText)")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
     }
 
     // MARK: Обновления

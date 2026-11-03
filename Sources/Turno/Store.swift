@@ -19,13 +19,31 @@ final class Store: ObservableObject {
         var checkUpdatesOnLaunch: Bool = true
         var configVersion: Int?                    // версия конфигурации (миграции)
 
+        // MARK: Метаданные синхронизации (на расчёты не влияют)
+
+        /// Время последнего изменения записи: "employee:<id>", "shift:<ключ>", …
+        var syncStamps: [String: Date] = [:]
+        /// Удаления записей: ключ → когда удалили. Не дают записи «воскреснуть»
+        /// при слиянии с другим устройством.
+        var syncTombstones: [String: Date] = [:]
+        /// Отпечатки записей на момент последнего сохранения. По ним Store
+        /// понимает, что именно изменилось, и ставит метку только изменённым.
+        var syncSeen: [String: String] = [:]
+        /// ID устройства, которое последним сохраняло файл.
+        var syncDeviceID: String?
+        /// Время последней синхронизации/изменения — для интерфейса.
+        var syncUpdatedAt: Date?
+
         /// Тolerant decoding: каждое поле читается через decodeIfPresent с дефолтом,
         /// поэтому файл любой прошлой/будущей версии читается без ошибки —
         /// недостающие поля просто берут значения по умолчанию.
         init(employees: [Employee] = [], shifts: [String: Shift] = [:],
              revenues: [String: DayRevenue] = [:], thresholds: [BonusThreshold] = [],
              fines: [Fine] = [], premiums: [Premium] = [],
-             checkUpdatesOnLaunch: Bool = true, configVersion: Int? = nil) {
+             checkUpdatesOnLaunch: Bool = true, configVersion: Int? = nil,
+             syncStamps: [String: Date] = [:], syncTombstones: [String: Date] = [:],
+             syncSeen: [String: String] = [:], syncDeviceID: String? = nil,
+             syncUpdatedAt: Date? = nil) {
             self.employees = employees
             self.shifts = shifts
             self.revenues = revenues
@@ -34,6 +52,11 @@ final class Store: ObservableObject {
             self.premiums = premiums
             self.checkUpdatesOnLaunch = checkUpdatesOnLaunch
             self.configVersion = configVersion
+            self.syncStamps = syncStamps
+            self.syncTombstones = syncTombstones
+            self.syncSeen = syncSeen
+            self.syncDeviceID = syncDeviceID
+            self.syncUpdatedAt = syncUpdatedAt
         }
 
         init(from decoder: Decoder) throws {
@@ -46,6 +69,21 @@ final class Store: ObservableObject {
             premiums    = try c.decodeIfPresent([Premium].self, forKey: .premiums) ?? []
             checkUpdatesOnLaunch = try c.decodeIfPresent(Bool.self, forKey: .checkUpdatesOnLaunch) ?? true
             configVersion = try c.decodeIfPresent(Int.self, forKey: .configVersion)
+            syncStamps = try c.decodeIfPresent([String: Date].self, forKey: .syncStamps) ?? [:]
+            syncTombstones = try c.decodeIfPresent([String: Date].self, forKey: .syncTombstones) ?? [:]
+            syncSeen = try c.decodeIfPresent([String: String].self, forKey: .syncSeen) ?? [:]
+            syncDeviceID = try c.decodeIfPresent(String.self, forKey: .syncDeviceID)
+            syncUpdatedAt = try c.decodeIfPresent(Date.self, forKey: .syncUpdatedAt)
+        }
+
+        /// Совпадает ли содержимое (без служебных метаданных синхронизации).
+        func hasSameContent(as other: AppData) -> Bool {
+            employees == other.employees
+                && shifts == other.shifts
+                && revenues == other.revenues
+                && thresholds == other.thresholds
+                && fines == other.fines
+                && premiums == other.premiums
         }
     }
 
@@ -57,12 +95,29 @@ final class Store: ObservableObject {
     ]
 
     @Published var data = AppData()
+    /// Вызывается после каждого сохранения на диск — для автосинхронизации.
+    /// Не участвует в кодировании и не попадает в файл.
+    var onDataSaved: (() -> Void)?
+    /// Пока применяем снимок с другого устройства, не помечаем его записи
+    /// как «изменённые сейчас» (иначе получится бесконечный обмен).
+    private var isApplyingSyncSnapshot = false
     /// Удалось ли загрузить реальные данные (чтобы не перезаписать файл демо-данными).
     private var hasLoadedRealData = false
     /// Файл существует, но не читается и бэкапов нет → не трогаем диск.
     private(set) var loadFailed = false
 
     static let appName = "Turno"
+
+    /// Постоянный ID этого устройства (не синхронизируется, живёт в UserDefaults).
+    static let deviceID: String = {
+        let key = "turno.sync.deviceID"
+        if let existing = UserDefaults.standard.string(forKey: key), !existing.isEmpty {
+            return existing
+        }
+        let fresh = UUID().uuidString
+        UserDefaults.standard.set(fresh, forKey: key)
+        return fresh
+    }()
 
     /// Локальная папка данных (Application Support) — fallback, когда iCloud недоступен.
     private static var localDir: URL {
@@ -202,12 +257,147 @@ final class Store: ObservableObject {
     }
 
     func saveNow() {
+        refreshSyncStamps()
         try? FileManager.default.createDirectory(at: Self.supportDir, withIntermediateDirectories: true)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         if let raw = try? encoder.encode(data) {
             try? raw.write(to: Self.dataFile, options: [.atomic])
         }
+        onDataSaved?()
+    }
+
+    // MARK: - Метаданные синхронизации
+
+    /// Отпечатки всех записей: неизменённые записи сохраняют свою метку времени,
+    /// поэтому при слиянии «побеждает» действительно более свежая версия.
+    func currentFingerprints() -> [String: String] {
+        var result: [String: String] = [:]
+        for e in data.employees {
+            result["employee:\(e.id.uuidString)"] = SyncHash.fingerprint(e)
+        }
+        for (key, s) in data.shifts {
+            result["shift:\(key)"] = SyncHash.fingerprint(s)
+        }
+        for (key, r) in data.revenues {
+            result["revenue:\(key)"] = SyncHash.fingerprint(r)
+        }
+        for t in data.thresholds {
+            result["threshold:\(t.id.uuidString)"] = SyncHash.fingerprint(t)
+        }
+        for f in data.fines {
+            result["fine:\(f.id.uuidString)"] = SyncHash.fingerprint(f)
+        }
+        for p in data.premiums {
+            result["premium:\(p.id.uuidString)"] = SyncHash.fingerprint(p)
+        }
+        return result
+    }
+
+    /// Сравнивает текущие отпечатки с прошлым сохранением: изменённым/новым
+    /// записям ставит текущее время, для исчезнувших — tombstone.
+    func refreshSyncStamps(now: Date = Date()) {
+        let current = currentFingerprints()
+        data.syncDeviceID = Self.deviceID
+        if isApplyingSyncSnapshot {
+            data.syncSeen = current
+            return
+        }
+        var changed = false
+        for (key, fp) in current where data.syncSeen[key] != fp {
+            data.syncStamps[key] = now
+            data.syncSeen[key] = fp
+            data.syncTombstones.removeValue(forKey: key)
+            changed = true
+        }
+        let removed = Set(data.syncSeen.keys).subtracting(current.keys)
+        for key in removed {
+            data.syncSeen.removeValue(forKey: key)
+            data.syncStamps.removeValue(forKey: key)
+            if data.syncTombstones[key] == nil {
+                data.syncTombstones[key] = now
+            }
+            changed = true
+        }
+        // Старые tombstone-метки не нужны: записи давно нет на обоих устройствах.
+        let cutoff = now.addingTimeInterval(-90 * 24 * 3600)
+        for (key, date) in data.syncTombstones where date < cutoff {
+            data.syncTombstones.removeValue(forKey: key)
+        }
+        if changed {
+            data.syncUpdatedAt = now
+        }
+    }
+
+    /// Полный снимок для отправки на другое устройство (с актуальными метками).
+    func syncSnapshot() -> AppData {
+        refreshSyncStamps()
+        return data
+    }
+
+    /// Применяет снимок, полученный после слияния. Перед заменой делает резервную
+    /// копию, а отпечатки берёт из снимка — чтобы не считать чужие записи «своими».
+    @discardableResult
+    func applySyncSnapshot(_ snapshot: AppData) -> Bool {
+        guard !data.hasSameContent(as: snapshot)
+                || data.syncStamps != snapshot.syncStamps
+                || data.syncTombstones != snapshot.syncTombstones
+        else { return false }
+
+        if !data.employees.isEmpty || !data.shifts.isEmpty {
+            try? backup()
+        }
+        var next = snapshot
+        next.syncDeviceID = Self.deviceID
+        next.configVersion = data.configVersion ?? next.configVersion
+        next.checkUpdatesOnLaunch = data.checkUpdatesOnLaunch
+        next.syncUpdatedAt = Date()
+        isApplyingSyncSnapshot = true
+        data = next
+        data.syncSeen = currentFingerprints()
+        saveNow()                    // refreshSyncStamps увидит флаг и только обновит seen
+        isApplyingSyncSnapshot = false
+        return true
+    }
+
+    /// Слияние с данными другого устройства (без изменения локальных данных).
+    func merged(with remote: AppData) -> AppData {
+        refreshSyncStamps()
+        return SyncMerge.merge(local: data, remote: remote)
+    }
+
+    /// Взять данные другого устройства целиком (с его метками времени).
+    func adopting(_ remote: AppData) -> AppData {
+        var next = remote
+        next.syncDeviceID = Self.deviceID
+        next.configVersion = data.configVersion ?? remote.configVersion
+        next.checkUpdatesOnLaunch = data.checkUpdatesOnLaunch
+        next.syncSeen = [:]
+        return next
+    }
+
+    /// Сделать текущие данные главными: все записи получают метку «сейчас»,
+    /// а записи, которых у нас нет, помечаются удалёнными на другом устройстве.
+    func authoritative(over remote: AppData) -> AppData {
+        refreshSyncStamps()
+        let now = Date()
+        var next = data
+        let localKeys = Set(currentFingerprints().keys)
+        let remoteKeys = remote.allRecordKeys()
+        for key in remoteKeys.subtracting(localKeys) {
+            next.syncTombstones[key] = now
+            next.syncStamps.removeValue(forKey: key)
+        }
+        let fingerprints = currentFingerprints()
+        for key in localKeys {
+            next.syncStamps[key] = now
+            next.syncSeen[key] = fingerprints[key]
+            next.syncTombstones.removeValue(forKey: key)
+        }
+        next.syncUpdatedAt = now
+        next.syncDeviceID = Self.deviceID
+        next.syncSeen = fingerprints
+        return next
     }
 
     /// Резервная копия одной кнопкой.
@@ -249,6 +439,12 @@ final class Store: ObservableObject {
             try? backup()
         }
         data = decoded
+        // Импорт — осознанная замена данных: помечаем всё локальным «сейчас»,
+        // чтобы следующая синхронизация не откатила импорт к старым меткам.
+        data.syncStamps = [:]
+        data.syncTombstones = [:]
+        data.syncSeen = [:]
+        data.syncUpdatedAt = Date()
         hasLoadedRealData = true
         migrate()
         saveNow()
