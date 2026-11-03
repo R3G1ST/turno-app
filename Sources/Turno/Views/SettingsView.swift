@@ -502,9 +502,9 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Синхронизация Mac ↔ iPhone")
+                    Text("Синхронизация через GitHub")
                         .font(.headline)
-                    Text("Два независимых канала: GitHub и прямой Wi-Fi. Данные сливаются по записям — свежая правка побеждает, удаления не воскресают.")
+                    Text("Изменения отправляются автоматически через 0,4 секунды и появляются на втором устройстве примерно за секунду. Данные сливаются по записям — свежая правка побеждает, удаления не воскресают.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -516,10 +516,14 @@ struct SettingsView: View {
             }
 
             githubCard
-            wifiCard
             syncStatus
 
-            Text("Токен и код Wi-Fi хранятся только на устройстве и не попадают в файл синхронизации. На Mac и iPhone нужны одинаковые токен и код.")
+            Label("Локальная синхронизация по Wi-Fi временно отключена — она вернётся позже. Сейчас все устройства обмениваются данными через GitHub.", systemImage: "wifi.slash")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("Токен хранится только на устройстве и не попадает в файл синхронизации. На Mac и iPhone нужны одинаковые репозиторий и токен.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -528,7 +532,6 @@ struct SettingsView: View {
             Spacer(minLength: 0)
             #endif
         }
-        .onAppear { sync.refreshWiFi() }
     }
 
     private var githubCard: some View {
@@ -590,101 +593,6 @@ struct SettingsView: View {
             }
             .font(.callout.weight(.medium))
             .controlSize(.small)
-        }
-        .padding(12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.05), lineWidth: 1)
-        )
-    }
-
-    private var wifiCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Label("Wi-Fi напрямую", systemImage: "wifi")
-                    .font(.callout.weight(.semibold))
-                Spacer()
-                Toggle("Включено", isOn: $sync.wifiEnabled)
-                    .toggleStyle(.switch)
-                    .controlSize(.mini)
-            }
-
-            #if os(macOS)
-            HStack(alignment: .center, spacing: 10) {
-                Text("Код для iPhone:")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text(sync.wifiCode)
-                    .font(.system(.title3, design: .monospaced).weight(.bold))
-                    .tracking(2)
-                    .textSelection(.enabled)
-                Button("Новый код") {
-                    Haptics.tap()
-                    sync.regenerateWiFiCode()
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                Spacer(minLength: 0)
-                Label(sync.server.isRunning ? "Приём включён" : "Приём выключен",
-                      systemImage: sync.server.isRunning ? "dot.radiowaves.left.and.right" : "pause.circle")
-                    .font(.caption2)
-                    .foregroundStyle(sync.server.isRunning ? .green : .secondary)
-            }
-            Text(sync.server.status)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            if let last = sync.server.lastClientAt {
-                Text("Последнее подключение: \(last.formatted(date: .omitted, time: .shortened))")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
-            #else
-            HStack(spacing: 8) {
-                Text("Код с Mac:")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                TextField("000000", text: $sync.wifiCode)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(.body, design: .monospaced))
-                    .keyboardType(.numberPad)
-                    .frame(maxWidth: 110)
-                Button("Найти Mac") {
-                    Haptics.tap()
-                    sync.refreshWiFi()
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                Spacer(minLength: 0)
-            }
-
-            Text(sync.browser.status)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            ForEach(sync.browser.peers) { peer in
-                Button {
-                    Haptics.select()
-                    sync.syncWiFi(to: peer)
-                } label: {
-                    HStack {
-                        Image(systemName: "laptopcomputer")
-                        Text(peer.name).lineLimit(1)
-                        Spacer()
-                        Text("Синхронизировать")
-                            .font(.caption.weight(.semibold))
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-            }
-
-            Toggle("Искать Mac при открытии настроек", isOn: $sync.wifiAuto)
-                .font(.caption2)
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-            #endif
         }
         .padding(12)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))

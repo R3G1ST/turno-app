@@ -90,6 +90,10 @@ struct RootView: View {
                 if phase == .active {
                     store.scanInbox()
                     sync.appDidBecomeActive()
+                } else if phase == .background {
+                    // На iPhone в фоне опрос прекращаем: сеть всё равно засыпает,
+                    // а при возврате синхронизация возобновится сразу.
+                    sync.appDidEnterBackground()
                 }
             }
             // Файл может оказаться в папке чуть позже появления экрана

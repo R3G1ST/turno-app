@@ -256,6 +256,7 @@ enum SyncError: LocalizedError {
     case timeout
     case network(String)
     case serverUnavailable
+    case rateLimited
 
     var errorDescription: String? {
         switch self {
@@ -279,8 +280,23 @@ enum SyncError: LocalizedError {
             return text
         case .serverUnavailable:
             return "Приём на Mac не запущен"
+        case .rateLimited:
+            return "GitHub временно ограничил частоту запросов. Синхронизация продолжится автоматически через несколько минут."
         }
     }
+}
+
+// MARK: - Ответ GitHub с учётом ETag
+
+struct GitHubRemote {
+    let data: Store.AppData
+    let sha: String
+    let etag: String?
+}
+
+enum GitHubLoad {
+    case notModified(etag: String?)
+    case remote(GitHubRemote)
 }
 
 // MARK: - GitHub Contents API
@@ -295,15 +311,21 @@ struct GitHubClient {
         URL(string: "https://api.github.com/repos/\(repo)/contents/\(path)?ref=\(branch)")
     }
 
-    private func request(_ url: URL, method: String = "GET", body: Data? = nil) -> URLRequest {
+    private func request(_ url: URL, method: String = "GET", body: Data? = nil,
+                         ifNoneMatch: String? = nil) -> URLRequest {
         var req = URLRequest(url: url)
         req.httpMethod = method
-        req.timeoutInterval = 25
+        req.timeoutInterval = 20
+        // Ответ должен быть свежим: кэш URLSession не участвует в синхронизации.
+        req.cachePolicy = .reloadIgnoringLocalCacheData
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         req.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
-        req.setValue("Turno/1.0.17", forHTTPHeaderField: "User-Agent")
+        req.setValue("Turno/1.0.19", forHTTPHeaderField: "User-Agent")
         req.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        if let ifNoneMatch {
+            req.setValue(ifNoneMatch, forHTTPHeaderField: "If-None-Match")
+        }
         if body != nil {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = body
@@ -311,23 +333,58 @@ struct GitHubClient {
         return req
     }
 
-    func load() async throws -> (data: Store.AppData, sha: String) {
+    /// 403 от GitHub — это либо мало прав у токена, либо исчерпан лимит запросов.
+    private func throwIfRateLimited(_ http: HTTPURLResponse) throws {
+        if http.statusCode == 429 {
+            throw SyncError.rateLimited
+        }
+        if http.statusCode == 403,
+           http.value(forHTTPHeaderField: "x-ratelimit-remaining") == "0" {
+            throw SyncError.rateLimited
+        }
+    }
+
+    /// Загружает файл. Если передан etag и файл не менялся, GitHub отвечает
+    /// 304 — такой запрос не расходует лимит, поэтому опрос раз в секунду
+    /// безопасен для двух устройств.
+    func load(ifNoneMatch: String? = nil) async throws -> GitHubLoad {
         guard !repo.isEmpty, !token.isEmpty else { throw SyncError.notConfigured }
         guard let url = contentsURL else { throw SyncError.notConfigured }
-        let (raw, response) = try await URLSession.shared.data(for: request(url))
+        let (raw, response) = try await URLSession.shared.data(
+            for: request(url, ifNoneMatch: ifNoneMatch))
         guard let http = response as? HTTPURLResponse else { throw SyncError.badData }
+        try throwIfRateLimited(http)
+
+        let etag = http.value(forHTTPHeaderField: "ETag")
         switch http.statusCode {
-        case 200: break
-        case 401, 403: throw SyncError.unauthorized
-        case 404: throw SyncError.notFound
-        default: throw SyncError.http(http.statusCode)
+        case 304:
+            return .notModified(etag: etag)
+        case 200:
+            break
+        case 401:
+            throw SyncError.unauthorized
+        case 404:
+            throw SyncError.notFound
+        default:
+            throw SyncError.http(http.statusCode)
         }
+
         guard let obj = try? JSONSerialization.jsonObject(with: raw) as? [String: Any],
               let content = obj["content"] as? String,
               let sha = obj["sha"] as? String,
               let decoded = Data(base64Encoded: content.replacingOccurrences(of: "\n", with: ""))
         else { throw SyncError.badData }
-        return (try SyncCodec.decode(decoded), sha)
+        return .remote(GitHubRemote(data: try SyncCodec.decode(decoded), sha: sha, etag: etag))
+    }
+
+    /// Удобная форма для ручных действий: всегда читает файл целиком.
+    func load() async throws -> (data: Store.AppData, sha: String, etag: String?) {
+        switch try await load(ifNoneMatch: nil) {
+        case .remote(let remote):
+            return (remote.data, remote.sha, remote.etag)
+        case .notModified:
+            throw SyncError.badData
+        }
     }
 
     func save(_ data: Store.AppData, sha: String?) async throws -> String {
@@ -346,16 +403,21 @@ struct GitHubClient {
         ]
         if let sha { body["sha"] = sha }
         let bodyData = try JSONSerialization.data(withJSONObject: body)
-        let (answer, response) = try await URLSession.shared.data(for: request(url, method: "PUT", body: bodyData))
+        let (answer, response) = try await URLSession.shared.data(
+            for: request(url, method: "PUT", body: bodyData))
         guard let http = response as? HTTPURLResponse else { throw SyncError.badData }
+        try throwIfRateLimited(http)
         switch http.statusCode {
         case 200, 201:
             let obj = try? JSONSerialization.jsonObject(with: answer) as? [String: Any]
             let content = obj?["content"] as? [String: Any]
             return content?["sha"] as? String ?? ""
-        case 401, 403: throw SyncError.unauthorized
-        case 409, 422: throw SyncError.conflict
-        default: throw SyncError.http(http.statusCode)
+        case 401:
+            throw SyncError.unauthorized
+        case 409, 422:
+            throw SyncError.conflict
+        default:
+            throw SyncError.http(http.statusCode)
         }
     }
 }
@@ -713,6 +775,7 @@ final class SyncManager: ObservableObject {
         static let token = "turno.sync.github.token"
         static let autoGitHub = "turno.sync.github.auto"
         static let initialized = "turno.sync.github.initialized"
+        // Ключи Wi-Fi оставлены на будущее: сам способ временно отключён.
         static let wifiEnabled = "turno.sync.wifi.enabled"
         static let wifiCode = "turno.sync.wifi.code"
         static let wifiAuto = "turno.sync.wifi.auto"
@@ -720,22 +783,36 @@ final class SyncManager: ObservableObject {
     }
 
     @Published var githubRepo: String {
-        didSet { UserDefaults.standard.set(githubRepo, forKey: DefaultsKey.repo) }
+        didSet {
+            UserDefaults.standard.set(githubRepo, forKey: DefaultsKey.repo)
+            credentialsChanged()
+        }
     }
     @Published var githubToken: String {
-        didSet { UserDefaults.standard.set(githubToken, forKey: DefaultsKey.token) }
+        didSet {
+            UserDefaults.standard.set(githubToken, forKey: DefaultsKey.token)
+            credentialsChanged()
+        }
     }
     @Published var autoGitHub: Bool {
-        didSet { UserDefaults.standard.set(autoGitHub, forKey: DefaultsKey.autoGitHub) }
+        didSet {
+            UserDefaults.standard.set(autoGitHub, forKey: DefaultsKey.autoGitHub)
+            if autoGitHub {
+                ensureRealtime()
+            } else {
+                stopRealtime()
+            }
+        }
     }
+    /// Wi-Fi-синхронизация временно отключена: значение всегда false.
     @Published var wifiEnabled: Bool {
         didSet {
-            UserDefaults.standard.set(wifiEnabled, forKey: DefaultsKey.wifiEnabled)
+            UserDefaults.standard.set(false, forKey: DefaultsKey.wifiEnabled)
             applyWiFiState()
         }
     }
     @Published var wifiAuto: Bool {
-        didSet { UserDefaults.standard.set(wifiAuto, forKey: DefaultsKey.wifiAuto) }
+        didSet { UserDefaults.standard.set(false, forKey: DefaultsKey.wifiAuto) }
     }
     @Published var wifiCode: String {
         didSet {
@@ -749,22 +826,36 @@ final class SyncManager: ObservableObject {
     @Published var lastSync: Date?
     @Published var lastError: String?
 
+    // Оставлены для будущего возврата Wi-Fi, но не запускаются.
     let server = WiFiSyncServer()
     let browser = WiFiBrowser()
 
     private var store: Store?
-    private var debounceTask: Task<Void, Never>?
-    private var wifiAutoTask: Task<Void, Never>?
     private var didConfigure = false
-    private var lastAutoAttempt: Date = .distantPast
+
+    // Realtime-обмен через GitHub
+    private var realtimeTask: Task<Void, Never>?
+    private var credentialsTask: Task<Void, Never>?
+    private var githubETag: String?
+    private var remoteSHA: String?
+    private var pendingPush = false
+    private var pendingPushDate: Date?
+    private var lastPushDate: Date = .distantPast
+    private var lastPollDate: Date = .distantPast
+    /// Идёт запрос к GitHub: опрос и отправка не выполняются одновременно.
+    private var busy = false
+    /// Пока применяем чужие данные, не отправляем их обратно.
+    private var suppressAutoPush = false
+    /// После 403/429 опрос приостанавливается, чтобы не расходовать лимит.
+    private var rateLimitedUntil: Date?
 
     init() {
         let defaults = UserDefaults.standard
         githubRepo = defaults.string(forKey: DefaultsKey.repo) ?? "R3G1ST/turno-sync"
         githubToken = defaults.string(forKey: DefaultsKey.token) ?? ""
         autoGitHub = defaults.object(forKey: DefaultsKey.autoGitHub) as? Bool ?? true
-        wifiEnabled = defaults.object(forKey: DefaultsKey.wifiEnabled) as? Bool ?? true
-        wifiAuto = defaults.object(forKey: DefaultsKey.wifiAuto) as? Bool ?? true
+        wifiEnabled = false
+        wifiAuto = false
         if let stored = defaults.string(forKey: DefaultsKey.wifiCode), stored.count >= 4 {
             wifiCode = stored
         } else {
@@ -781,7 +872,8 @@ final class SyncManager: ObservableObject {
         guard !didConfigure else { return }
         didConfigure = true
         self.store = store
-        store.onDataSaved = { [weak self] in self?.scheduleAutoSync() }
+        // Любое сохранение данных — повод отправить изменения на GitHub.
+        store.onDataSaved = { [weak self] in self?.noteLocalChange() }
 
         server.handleSnapshot = { [weak self] remote in
             guard let self, let store = self.store else { return remote }
@@ -793,38 +885,21 @@ final class SyncManager: ObservableObject {
             return store.syncSnapshot()
         }
         server.code = wifiCode
-        #if os(macOS)
+        // Wi-Fi-приём больше не запускаем, но код сохраняем на будущее.
         applyWiFiState()
-        #endif
+        ensureRealtime()
     }
 
     func appDidBecomeActive() {
-        guard let store else { return }
-        // При открытии приложения подтягиваем свежие данные, но не чаще раза в минуту.
-        if autoGitHub, githubConfigured, isInitialized,
-           Date().timeIntervalSince(lastAutoAttempt) > 60 {
-            lastAutoAttempt = Date()
-            Task { await syncGitHub(.merge, silent: true) }
-        }
-        #if os(macOS)
-        if wifiEnabled, !server.isRunning, store.data.syncUpdatedAt != nil {
-            applyWiFiState()
-        }
-        #else
-        // Автосинхронизация по Wi-Fi — только если пользователь уже спарил устройства.
-        if wifiEnabled, wifiAuto,
-           UserDefaults.standard.bool(forKey: DefaultsKey.wifiInitialized),
-           wifiCode.count >= 4, !isSyncing {
-            browser.stop()
-            browser.start()
-            wifiAutoTask?.cancel()
-            wifiAutoTask = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 6_000_000_000)
-                guard !Task.isCancelled, let self, let peer = self.browser.peers.first else { return }
-                self.syncWiFi(to: peer)
-            }
-        }
-        #endif
+        guard store != nil else { return }
+        guard autoGitHub, githubConfigured, isInitialized else { return }
+        ensureRealtime()
+        // Сразу проверяем GitHub, не дожидаясь такта цикла.
+        Task { [weak self] in await self?.pollOnce() }
+    }
+
+    func appDidEnterBackground() {
+        stopRealtime()
     }
 
     // MARK: GitHub
@@ -844,29 +919,242 @@ final class SyncManager: ObservableObject {
 
     func syncNow() {
         markInitialized()
-        Task { await syncGitHub(.merge, silent: false) }
+        runManual(.merge)
     }
 
     func downloadNow() {
         markInitialized()
-        Task { await syncGitHub(.download, silent: false) }
+        runManual(.download)
     }
 
     func uploadNow() {
         markInitialized()
-        Task { await syncGitHub(.upload, silent: false) }
+        runManual(.upload)
     }
 
-    private func scheduleAutoSync() {
-        guard autoGitHub, githubConfigured, isInitialized else { return }
-        debounceTask?.cancel()
-        debounceTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-            guard !Task.isCancelled else { return }
-            await self?.syncGitHub(.merge, silent: true)
+    /// Ручное действие ждёт завершения текущего фонового обмена, а не пропускается.
+    private func runManual(_ direction: Direction) {
+        Task { [weak self] in
+            guard let self else { return }
+            var waited = 0
+            while self.busy, waited < 50 {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                waited += 1
+            }
+            await self.syncGitHub(direction, silent: false)
         }
     }
 
+    /// Пользователь изменил репозиторий или токен: через полторы секунды
+    /// (когда ввод закончен) перезапускаем обмен с новыми настройками.
+    private func credentialsChanged() {
+        credentialsTask?.cancel()
+        credentialsTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.githubETag = nil
+            self.remoteSHA = nil
+            guard self.githubConfigured, self.isInitialized else { return }
+            self.ensureRealtime()
+            await self.pollOnce()
+        }
+    }
+
+    // MARK: Realtime-цикл
+
+    private func ensureRealtime() {
+        guard didConfigure, realtimeTask == nil else { return }
+        guard autoGitHub, githubConfigured, isInitialized else { return }
+        realtimeTask = Task { [weak self] in
+            await self?.realtimeLoop()
+        }
+    }
+
+    private func stopRealtime() {
+        realtimeTask?.cancel()
+        realtimeTask = nil
+    }
+
+    /// Каждые 0,2 с проверяем, не пора ли отправить правку (через 0,4 с после
+    /// изменения) или опросить GitHub (раз в секунду). Опрос идёт с ETag,
+    /// поэтому ответы 304 не тратят лимит запросов.
+    private func realtimeLoop() async {
+        while !Task.isCancelled {
+            if !busy {
+                let now = Date()
+                if let until = rateLimitedUntil, now < until {
+                    // Пауза после ограничения GitHub.
+                } else if pendingPush,
+                          let due = pendingPushDate, now >= due,
+                          now.timeIntervalSince(lastPushDate) >= 1.0 {
+                    await pushOnce()
+                } else if now.timeIntervalSince(lastPollDate) >= 1.0 {
+                    await pollOnce()
+                }
+            }
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+        realtimeTask = nil
+    }
+
+    private func makeClient() -> GitHubClient {
+        GitHubClient(
+            repo: githubRepo.trimmingCharacters(in: .whitespaces),
+            token: githubToken.trimmingCharacters(in: .whitespaces)
+        )
+    }
+
+    /// Один опрос GitHub. Изменения сразу сливаются и применяются.
+    private func pollOnce() async {
+        guard let store, !store.loadFailed, !busy,
+              autoGitHub, githubConfigured, isInitialized else { return }
+        if let until = rateLimitedUntil, Date() < until { return }
+
+        lastPollDate = Date()
+        busy = true
+        defer { busy = false }
+
+        do {
+            switch try await makeClient().load(ifNoneMatch: githubETag) {
+            case .notModified(let etag):
+                if let etag { githubETag = etag }
+                markFirstContact()
+                if lastError != nil {
+                    lastError = nil
+                    statusMessage = "GitHub: синхронизировано \(Self.timeText(Date()))"
+                }
+            case .remote(let remote):
+                githubETag = remote.etag
+                remoteSHA = remote.sha
+                handleRemote(remote.data)
+                markFirstContact()
+                if lastError != nil {
+                    lastError = nil
+                    statusMessage = "GitHub: синхронизировано \(Self.timeText(Date()))"
+                }
+            }
+        } catch SyncError.rateLimited {
+            pauseForRateLimit()
+        } catch SyncError.notFound {
+            // Файла ещё нет: не ошибка, отправим его при следующей правке.
+            lastError = nil
+        } catch {
+            let text = error.localizedDescription
+            if lastError != text { lastError = text }
+        }
+    }
+
+    /// Первый успешный ответ GitHub показываем как состоявшуюся синхронизацию,
+    /// даже если данные не изменились.
+    private func markFirstContact() {
+        guard lastSync == nil else { return }
+        lastSync = Date()
+        statusMessage = "GitHub: синхронизировано \(Self.timeText(Date()))"
+    }
+
+    /// Применяет изменения с GitHub и решает, нужно ли что-то отправить обратно.
+    private func handleRemote(_ remote: Store.AppData) {
+        guard let store else { return }
+        let before = store.data
+        let merged = store.merged(with: remote)
+        let changedLocally = !Self.sameSyncState(before, merged)
+
+        if changedLocally {
+            suppressAutoPush = true
+            store.applySyncSnapshot(merged)
+            suppressAutoPush = false
+            lastSync = Date()
+            statusMessage = "GitHub: получены изменения \(Self.timeText(Date()))"
+        }
+
+        // Если после слияния у этого устройства есть то, чего нет на GitHub,
+        // отправляем объединённый снимок.
+        if !Self.sameSyncState(merged, remote) {
+            schedulePush(after: 0.2)
+        }
+    }
+
+    /// Отправка изменений. Не чаще одного PUT в секунду.
+    private func pushOnce() async {
+        guard let store, !store.loadFailed, !busy,
+              autoGitHub, githubConfigured, isInitialized else { return }
+        if let until = rateLimitedUntil, Date() < until {
+            pendingPushDate = until
+            return
+        }
+
+        pendingPush = false
+        pendingPushDate = nil
+        busy = true
+        defer {
+            busy = false
+            lastPushDate = Date()
+        }
+
+        let client = makeClient()
+        do {
+            var sha = remoteSHA
+            if sha == nil {
+                // Первый обмен: узнаём sha существующего файла и попутно
+                // подтягиваем чужие изменения, чтобы ничего не перезаписать.
+                if case .remote(let current) = try await client.load() {
+                    githubETag = current.etag
+                    remoteSHA = current.sha
+                    sha = current.sha
+                    let merged = store.merged(with: current.data)
+                    if !Self.sameSyncState(merged, current.data) {
+                        suppressAutoPush = true
+                        store.applySyncSnapshot(merged)
+                        suppressAutoPush = false
+                    }
+                }
+            }
+
+            let snapshot = store.syncSnapshot()
+            let freshSHA = try await client.save(snapshot, sha: sha)
+            if !freshSHA.isEmpty { remoteSHA = freshSHA }
+            // После PUT у файла новый ETag — заберём его следующим опросом.
+            githubETag = nil
+            lastSync = Date()
+            lastError = nil
+            statusMessage = "GitHub: отправлено \(Self.timeText(Date()))"
+        } catch SyncError.conflict {
+            // Кто-то успел записать файл раньше: перечитаем и сольём.
+            githubETag = nil
+            remoteSHA = nil
+            pendingPush = true
+            pendingPushDate = Date()
+        } catch SyncError.rateLimited {
+            pauseForRateLimit()
+            pendingPush = true
+            pendingPushDate = rateLimitedUntil
+        } catch {
+            let text = error.localizedDescription
+            if lastError != text { lastError = text }
+            pendingPush = true
+            pendingPushDate = Date().addingTimeInterval(5)
+        }
+    }
+
+    private func schedulePush(after delay: TimeInterval) {
+        guard autoGitHub, githubConfigured, isInitialized else { return }
+        pendingPush = true
+        pendingPushDate = Date().addingTimeInterval(delay)
+        ensureRealtime()
+    }
+
+    private func noteLocalChange() {
+        guard !suppressAutoPush else { return }
+        schedulePush(after: 0.4)
+    }
+
+    private func pauseForRateLimit() {
+        rateLimitedUntil = Date().addingTimeInterval(300)
+        lastError = SyncError.rateLimited.localizedDescription
+        statusMessage = "GitHub: пауза из-за лимита запросов"
+    }
+
+    /// Ручная синхронизация: полное чтение, слияние и (при необходимости) запись.
     private func syncGitHub(_ direction: Direction, silent: Bool) async {
         guard let store else { return }
         guard !store.loadFailed else {
@@ -881,47 +1169,60 @@ final class SyncManager: ObservableObject {
             if !silent { lastError = SyncError.notConfigured.localizedDescription }
             return
         }
-        guard !isSyncing else { return }
+        guard !busy else { return }
+
+        busy = true
         isSyncing = true
-        defer { isSyncing = false }
+        defer {
+            busy = false
+            isSyncing = false
+            lastPushDate = Date()
+            ensureRealtime()
+        }
         if !silent {
             statusMessage = "Связываемся с GitHub…"
             lastError = nil
         }
 
         do {
-            let client = GitHubClient(
-                repo: githubRepo.trimmingCharacters(in: .whitespaces),
-                token: githubToken.trimmingCharacters(in: .whitespaces)
-            )
-            let (remote, sha) = try await client.load()
+            let client = makeClient()
+            let remote = try await client.load()
+            githubETag = remote.etag
+            remoteSHA = remote.sha
 
             let merged: Store.AppData
             switch direction {
             case .merge:
-                merged = store.merged(with: remote)
+                merged = store.merged(with: remote.data)
             case .download:
-                merged = store.adopting(remote)
+                merged = store.adopting(remote.data)
             case .upload:
-                merged = store.authoritative(over: remote)
+                merged = store.authoritative(over: remote.data)
             }
+            suppressAutoPush = true
             store.applySyncSnapshot(merged)
+            suppressAutoPush = false
 
             let current = store.syncSnapshot()
-            let needsUpload = direction == .upload
-                || !current.hasSameContent(as: remote)
-                || current.syncStamps != remote.syncStamps
-                || current.syncTombstones != remote.syncTombstones
+            let needsUpload = direction == .upload || !Self.sameSyncState(current, remote.data)
 
             if needsUpload {
                 do {
-                    _ = try await client.save(current, sha: sha)
+                    let freshSHA = try await client.save(current, sha: remote.sha)
+                    if !freshSHA.isEmpty { remoteSHA = freshSHA }
+                    githubETag = nil
                 } catch SyncError.conflict {
                     // Кто-то успел изменить файл — один раз перечитываем и сливаем.
-                    let (freshRemote, freshSHA) = try await client.load()
-                    let retry = store.merged(with: freshRemote)
+                    let fresh = try await client.load()
+                    githubETag = fresh.etag
+                    remoteSHA = fresh.sha
+                    let retry = store.merged(with: fresh.data)
+                    suppressAutoPush = true
                     store.applySyncSnapshot(retry)
-                    _ = try await client.save(store.syncSnapshot(), sha: freshSHA)
+                    suppressAutoPush = false
+                    let freshSHA = try await client.save(store.syncSnapshot(), sha: fresh.sha)
+                    if !freshSHA.isEmpty { remoteSHA = freshSHA }
+                    githubETag = nil
                 }
             }
 
@@ -929,6 +1230,8 @@ final class SyncManager: ObservableObject {
             lastSync = Date()
             lastError = nil
             statusMessage = "GitHub: синхронизировано \(Self.timeText(Date()))"
+        } catch SyncError.rateLimited {
+            pauseForRateLimit()
         } catch {
             lastError = error.localizedDescription
             if !silent {
@@ -937,24 +1240,19 @@ final class SyncManager: ObservableObject {
         }
     }
 
-    // MARK: Wi-Fi
+    /// Сравнение без служебных полей (deviceID, seen, updatedAt).
+    private static func sameSyncState(_ a: Store.AppData, _ b: Store.AppData) -> Bool {
+        a.hasSameContent(as: b)
+            && a.syncStamps == b.syncStamps
+            && a.syncTombstones == b.syncTombstones
+    }
 
+    // MARK: Wi-Fi (временно отключено)
+
+    /// Wi-Fi-сервер и поиск не запускаются — синхронизация идёт через GitHub.
     func applyWiFiState() {
-        #if os(macOS)
-        if wifiEnabled {
-            server.code = wifiCode
-            server.start()
-        } else {
-            server.stop()
-        }
-        #else
-        // На iPhone приём не нужен — только поиск Mac.
-        if wifiEnabled {
-            browser.start()
-        } else {
-            browser.stop()
-        }
-        #endif
+        server.stop()
+        browser.stop()
     }
 
     func refreshWiFi() {
@@ -967,42 +1265,11 @@ final class SyncManager: ObservableObject {
 
     func regenerateWiFiCode() {
         wifiCode = Self.makeCode()
-        server.status = server.isRunning ? "Ждём iPhone…" : "Выключен"
+        server.status = "Wi-Fi временно отключён"
     }
 
     func syncWiFi(to peer: WiFiPeer) {
-        guard let store else { return }
-        guard !store.loadFailed else {
-            lastError = "Локальные данные не загрузились — синхронизация остановлена, чтобы ничего не перезаписать."
-            return
-        }
-        guard wifiCode.count >= 4 else {
-            lastError = "Введите код подключения с Mac"
-            return
-        }
-        guard !isSyncing else { return }
-        isSyncing = true
-        lastError = nil
-        statusMessage = "Синхронизация с \(peer.name)…"
-        Task {
-            defer { isSyncing = false }
-            do {
-                let payload = try SyncCodec.encode(store.syncSnapshot())
-                let answer = try await WiFiSyncClient.exchange(
-                    endpoint: peer.endpoint, code: wifiCode, payload: payload)
-                let raw = try SyncCrypto.open(answer, code: wifiCode)
-                let remote = try SyncCodec.decode(raw)
-                let merged = store.merged(with: remote)
-                store.applySyncSnapshot(merged)
-                UserDefaults.standard.set(true, forKey: DefaultsKey.wifiInitialized)
-                lastSync = Date()
-                lastError = nil
-                statusMessage = "Wi-Fi: синхронизировано \(Self.timeText(Date()))"
-            } catch {
-                lastError = error.localizedDescription
-                statusMessage = "Wi-Fi: ошибка"
-            }
-        }
+        lastError = "Wi-Fi-синхронизация временно отключена. Используйте GitHub."
     }
 
     // MARK: Прочее
