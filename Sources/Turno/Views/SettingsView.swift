@@ -23,6 +23,7 @@ struct SettingsView: View {
     @State private var transferMsg: String?
     @State private var transferMsgHasError = false
     @State private var pendingDirection: SyncDirection?
+    @State private var showHistory = false
 
     enum Tab: String, CaseIterable, Identifiable {
         case thresholds = "Надбавки"
@@ -30,6 +31,10 @@ struct SettingsView: View {
         case sync = "Связь"
         case updates = "Обновления"
         var id: String { rawValue }
+    }
+
+    init(initialTab: Tab = .thresholds) {
+        _tab = State(initialValue: initialTab)
     }
 
     var body: some View {
@@ -516,7 +521,11 @@ struct SettingsView: View {
             }
 
             githubCard
+            if !sync.conflicts.isEmpty {
+                conflictsCard
+            }
             syncStatus
+            historyCard
 
             Label("Локальная синхронизация по Wi-Fi временно отключена — она вернётся позже. Сейчас все устройства обмениваются данными через GitHub.", systemImage: "wifi.slash")
                 .font(.caption2)
@@ -607,6 +616,116 @@ struct SettingsView: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.05), lineWidth: 1)
         )
+    }
+
+    // MARK: Конфликты и история
+
+    private var conflictsCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Label("Конфликты синхронизации", systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.orange)
+                Spacer()
+                Text("\(sync.conflicts.count)")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.orange)
+            }
+
+            Text("Одну и ту же запись изменили на этом устройстве и на GitHub. Пока конфликт не разрешён, изменения не отправляются, чтобы ничего не потерять.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            ForEach(sync.conflicts) { conflict in
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(conflict.title)
+                        .font(.caption.weight(.semibold))
+
+                    HStack(alignment: .top, spacing: 8) {
+                        conflictSide("Это устройство", conflict.localText, color: .accentColor)
+                        conflictSide("GitHub", conflict.remoteText, color: .orange)
+                    }
+
+                    HStack(spacing: 8) {
+                        Button {
+                            Haptics.tap()
+                            sync.resolveConflict(conflict, keepLocal: true)
+                        } label: {
+                            Label("Оставить моё", systemImage: "desktopcomputer")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+
+                        Button {
+                            Haptics.select()
+                            sync.resolveConflict(conflict, keepLocal: false)
+                        } label: {
+                            Label("Взять с GitHub", systemImage: "arrow.down.circle")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .font(.caption.weight(.medium))
+                    .controlSize(.small)
+                }
+                .padding(10)
+                .background(.quaternary.opacity(0.25),
+                            in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+        }
+        .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.orange.opacity(0.35), lineWidth: 1)
+        )
+    }
+
+    private func conflictSide(_ title: String, _ text: String, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(color)
+            Text(text)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(8)
+        .background(color.opacity(0.08),
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private var historyCard: some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Label("История версий", systemImage: "clock.arrow.circlepath")
+                    .font(.callout.weight(.semibold))
+                Text("Можно вернуть данные на одну из последних версий с GitHub.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Button("Открыть") {
+                Haptics.tap()
+                showHistory = true
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.05), lineWidth: 1)
+        )
+        .sheet(isPresented: $showHistory) {
+            SyncHistoryView()
+                .environmentObject(sync)
+        }
     }
 
     private var syncStatus: some View {

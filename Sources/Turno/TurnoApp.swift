@@ -56,6 +56,8 @@ struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var tab: Tab = .schedule
     @State private var showSettings = false
+    @State private var settingsInitialTab: SettingsView.Tab = .thresholds
+    @State private var settingsFocus = 0
 
     enum Tab: String, CaseIterable, Identifiable {
         case schedule = "График"
@@ -112,7 +114,26 @@ struct RootView: View {
         macBody
         #else
         iosBody
+            .overlay(alignment: .bottomTrailing) { iosSyncBadge }
         #endif
+    }
+
+    /// На iPhone показываем плашку только когда идёт обмен, есть конфликт,
+    /// ошибка или ожидание сети. В обычном состоянии она не мешает.
+    @ViewBuilder
+    private var iosSyncBadge: some View {
+        if sync.indicator != .synced && sync.indicator != .off && sync.indicator != .idle {
+            SyncBadge {
+                Haptics.tap()
+                settingsInitialTab = .sync
+                settingsFocus += 1
+                tab = .settings
+            }
+            .padding(.trailing, 14)
+            .padding(.bottom, 64)
+            .transition(.opacity.combined(with: .move(edge: .bottom)))
+            .animation(.easeInOut(duration: 0.2), value: sync.indicator)
+        }
     }
 
     /// Гарантированно видимый результат импорта: баннер поверх всего экрана.
@@ -215,13 +236,25 @@ struct RootView: View {
 
             SidebarButton(icon: "gearshape", title: "Настройки", selected: showSettings) {
                 Haptics.tap()
+                settingsInitialTab = .thresholds
                 showSettings = true
             }
+
+            Divider()
+                .frame(height: 30)
+                .padding(.horizontal, 6)
+
+            SyncBadge {
+                Haptics.tap()
+                settingsInitialTab = .sync
+                showSettings = true
+            }
+            .padding(.trailing, 6)
         }
         .padding(10)
         .background(.ultraThinMaterial)
         .sheet(isPresented: $showSettings) {
-            SettingsView()
+            SettingsView(initialTab: settingsInitialTab)
                 .environmentObject(store)
                 .environmentObject(updater)
                 .environmentObject(sync)
@@ -264,7 +297,8 @@ struct RootView: View {
                 .environmentObject(store)
                 .tabItem { Label("Люди", systemImage: Tab.employees.icon) }
                 .tag(Tab.employees)
-            SettingsView()
+            SettingsView(initialTab: settingsInitialTab)
+                .id(settingsFocus)
                 .environmentObject(store)
                 .environmentObject(updater)
                 .environmentObject(sync)

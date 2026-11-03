@@ -85,6 +85,80 @@ final class Store: ObservableObject {
                 && fines == other.fines
                 && premiums == other.premiums
         }
+
+        /// Отпечатки всех записей — одинаковые данные дают одинаковый отпечаток
+        /// на Mac и iPhone.
+        func fingerprints() -> [String: String] {
+            var result: [String: String] = [:]
+            for e in employees {
+                result["employee:\(e.id.uuidString)"] = SyncHash.fingerprint(e)
+            }
+            for (key, s) in shifts {
+                result["shift:\(key)"] = SyncHash.fingerprint(s)
+            }
+            for (key, r) in revenues {
+                result["revenue:\(key)"] = SyncHash.fingerprint(r)
+            }
+            for t in thresholds {
+                result["threshold:\(t.id.uuidString)"] = SyncHash.fingerprint(t)
+            }
+            for f in fines {
+                result["fine:\(f.id.uuidString)"] = SyncHash.fingerprint(f)
+            }
+            for p in premiums {
+                result["premium:\(p.id.uuidString)"] = SyncHash.fingerprint(p)
+            }
+            return result
+        }
+
+        /// Возвращает копию снимка, в которой запись `key` взята из `source`
+        /// вместе с её меткой времени. Нужно, чтобы при конфликте сохранить
+        /// локальную версию и не потерять остальные изменения с GitHub.
+        func replacingRecord(key: String, with source: AppData) -> AppData {
+            var out = self
+            let parts = key.split(separator: ":", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { return out }
+            let kind = parts[0]
+            let id = parts[1]
+
+            switch kind {
+            case "employee":
+                out.employees.removeAll { $0.id.uuidString == id }
+                if let value = source.employees.first(where: { $0.id.uuidString == id }) {
+                    out.employees.append(value)
+                }
+            case "shift":
+                if let value = source.shifts[id] { out.shifts[id] = value }
+                else { out.shifts.removeValue(forKey: id) }
+            case "revenue":
+                if let value = source.revenues[id] { out.revenues[id] = value }
+                else { out.revenues.removeValue(forKey: id) }
+            case "threshold":
+                out.thresholds.removeAll { $0.id.uuidString == id }
+                if let value = source.thresholds.first(where: { $0.id.uuidString == id }) {
+                    out.thresholds.append(value)
+                }
+            case "fine":
+                out.fines.removeAll { $0.id.uuidString == id }
+                if let value = source.fines.first(where: { $0.id.uuidString == id }) {
+                    out.fines.append(value)
+                }
+            case "premium":
+                out.premiums.removeAll { $0.id.uuidString == id }
+                if let value = source.premiums.first(where: { $0.id.uuidString == id }) {
+                    out.premiums.append(value)
+                }
+            default:
+                return out
+            }
+
+            if let stamp = source.syncStamps[key] { out.syncStamps[key] = stamp }
+            else { out.syncStamps.removeValue(forKey: key) }
+            if let tombstone = source.syncTombstones[key] { out.syncTombstones[key] = tombstone }
+            else { out.syncTombstones.removeValue(forKey: key) }
+            out.syncSeen.removeValue(forKey: key)
+            return out
+        }
     }
 
     /// Реальные пороги владельца и базовая ставка.
@@ -272,26 +346,94 @@ final class Store: ObservableObject {
     /// Отпечатки всех записей: неизменённые записи сохраняют свою метку времени,
     /// поэтому при слиянии «побеждает» действительно более свежая версия.
     func currentFingerprints() -> [String: String] {
-        var result: [String: String] = [:]
-        for e in data.employees {
-            result["employee:\(e.id.uuidString)"] = SyncHash.fingerprint(e)
+        data.fingerprints()
+    }
+
+    /// Применяет выбранную пользователем версию конфликтной записи.
+    /// `key` — "employee:<id>", "shift:<uuid|дата>", "revenue:<день>", …
+    /// Если в источнике записи нет, значит пользователь выбрал удаление.
+    func applyRecordChoice(key: String, from source: AppData) {
+        let parts = key.split(separator: ":", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { return }
+        let kind = parts[0]
+        let id = parts[1]
+        var exists = false
+
+        switch kind {
+        case "employee":
+            if let value = source.employees.first(where: { $0.id.uuidString == id }) {
+                if let i = data.employees.firstIndex(where: { $0.id.uuidString == id }) {
+                    data.employees[i] = value
+                } else {
+                    data.employees.append(value)
+                }
+                exists = true
+            } else {
+                data.employees.removeAll { $0.id.uuidString == id }
+            }
+        case "shift":
+            if let value = source.shifts[id] {
+                data.shifts[id] = value
+                exists = true
+            } else {
+                data.shifts.removeValue(forKey: id)
+            }
+        case "revenue":
+            if let value = source.revenues[id] {
+                data.revenues[id] = value
+                exists = true
+            } else {
+                data.revenues.removeValue(forKey: id)
+            }
+        case "threshold":
+            if let value = source.thresholds.first(where: { $0.id.uuidString == id }) {
+                if let i = data.thresholds.firstIndex(where: { $0.id.uuidString == id }) {
+                    data.thresholds[i] = value
+                } else {
+                    data.thresholds.append(value)
+                }
+                exists = true
+            } else {
+                data.thresholds.removeAll { $0.id.uuidString == id }
+            }
+        case "fine":
+            if let value = source.fines.first(where: { $0.id.uuidString == id }) {
+                if let i = data.fines.firstIndex(where: { $0.id.uuidString == id }) {
+                    data.fines[i] = value
+                } else {
+                    data.fines.append(value)
+                }
+                exists = true
+            } else {
+                data.fines.removeAll { $0.id.uuidString == id }
+            }
+        case "premium":
+            if let value = source.premiums.first(where: { $0.id.uuidString == id }) {
+                if let i = data.premiums.firstIndex(where: { $0.id.uuidString == id }) {
+                    data.premiums[i] = value
+                } else {
+                    data.premiums.append(value)
+                }
+                exists = true
+            } else {
+                data.premiums.removeAll { $0.id.uuidString == id }
+            }
+        default:
+            return
         }
-        for (key, s) in data.shifts {
-            result["shift:\(key)"] = SyncHash.fingerprint(s)
+
+        let now = Date()
+        if exists {
+            data.syncStamps[key] = now
+            data.syncTombstones.removeValue(forKey: key)
+            data.syncSeen[key] = currentFingerprints()[key]
+        } else {
+            data.syncStamps.removeValue(forKey: key)
+            data.syncSeen.removeValue(forKey: key)
+            data.syncTombstones[key] = now
         }
-        for (key, r) in data.revenues {
-            result["revenue:\(key)"] = SyncHash.fingerprint(r)
-        }
-        for t in data.thresholds {
-            result["threshold:\(t.id.uuidString)"] = SyncHash.fingerprint(t)
-        }
-        for f in data.fines {
-            result["fine:\(f.id.uuidString)"] = SyncHash.fingerprint(f)
-        }
-        for p in data.premiums {
-            result["premium:\(p.id.uuidString)"] = SyncHash.fingerprint(p)
-        }
-        return result
+        data.syncUpdatedAt = now
+        saveNow()
     }
 
     /// Сравнивает текущие отпечатки с прошлым сохранением: изменённым/новым

@@ -299,6 +299,13 @@ enum GitHubLoad {
     case remote(GitHubRemote)
 }
 
+struct GitHubCommit: Identifiable, Equatable {
+    let id: String
+    let message: String
+    let date: Date
+    let author: String
+}
+
 // MARK: - GitHub Contents API
 
 struct GitHubClient {
@@ -307,8 +314,9 @@ struct GitHubClient {
     var branch = "main"
     var path = "turno.json"
 
-    private var contentsURL: URL? {
-        URL(string: "https://api.github.com/repos/\(repo)/contents/\(path)?ref=\(branch)")
+    private func contentsURL(ref: String? = nil) -> URL? {
+        let target = ref ?? branch
+        return URL(string: "https://api.github.com/repos/\(repo)/contents/\(path)?ref=\(target)")
     }
 
     private func request(_ url: URL, method: String = "GET", body: Data? = nil,
@@ -347,9 +355,9 @@ struct GitHubClient {
     /// Загружает файл. Если передан etag и файл не менялся, GitHub отвечает
     /// 304 — такой запрос не расходует лимит, поэтому опрос раз в секунду
     /// безопасен для двух устройств.
-    func load(ifNoneMatch: String? = nil) async throws -> GitHubLoad {
+    func load(ifNoneMatch: String? = nil, ref: String? = nil) async throws -> GitHubLoad {
         guard !repo.isEmpty, !token.isEmpty else { throw SyncError.notConfigured }
-        guard let url = contentsURL else { throw SyncError.notConfigured }
+        guard let url = contentsURL(ref: ref) else { throw SyncError.notConfigured }
         let (raw, response) = try await URLSession.shared.data(
             for: request(url, ifNoneMatch: ifNoneMatch))
         guard let http = response as? HTTPURLResponse else { throw SyncError.badData }
@@ -387,9 +395,69 @@ struct GitHubClient {
         }
     }
 
+    /// Читает файл из конкретной версии (коммита) — для отката.
+    func load(at ref: String) async throws -> (data: Store.AppData, sha: String) {
+        switch try await load(ifNoneMatch: nil, ref: ref) {
+        case .remote(let remote):
+            return (remote.data, remote.sha)
+        case .notModified:
+            throw SyncError.badData
+        }
+    }
+
+    /// Последние коммиты, изменившие файл синхронизации.
+    func history(limit: Int = 20) async throws -> [GitHubCommit] {
+        guard !repo.isEmpty, !token.isEmpty else { throw SyncError.notConfigured }
+        guard var components = URLComponents(
+            string: "https://api.github.com/repos/\(repo)/commits") else {
+            throw SyncError.notConfigured
+        }
+        components.queryItems = [
+            URLQueryItem(name: "path", value: path),
+            URLQueryItem(name: "sha", value: branch),
+            URLQueryItem(name: "per_page", value: String(limit)),
+        ]
+        guard let url = components.url else { throw SyncError.notConfigured }
+        let (raw, response) = try await URLSession.shared.data(for: request(url))
+        guard let http = response as? HTTPURLResponse else { throw SyncError.badData }
+        try throwIfRateLimited(http)
+        switch http.statusCode {
+        case 200: break
+        case 401: throw SyncError.unauthorized
+        case 409: throw SyncError.notFound
+        default: throw SyncError.http(http.statusCode)
+        }
+
+        guard let items = try? JSONSerialization.jsonObject(with: raw) as? [[String: Any]] else {
+            throw SyncError.badData
+        }
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let isoPlain = ISO8601DateFormatter()
+        isoPlain.formatOptions = [.withInternetDateTime]
+
+        return items.compactMap { item in
+            guard let sha = item["sha"] as? String,
+                  let commit = item["commit"] as? [String: Any],
+                  let message = commit["message"] as? String,
+                  let authorInfo = commit["author"] as? [String: Any],
+                  let dateText = authorInfo["date"] as? String,
+                  let date = iso.date(from: dateText) ?? isoPlain.date(from: dateText)
+            else { return nil }
+            let login = (item["author"] as? [String: Any])?["login"] as? String
+            let name = authorInfo["name"] as? String
+            return GitHubCommit(
+                id: sha,
+                message: message.split(separator: "\n").first.map(String.init) ?? message,
+                date: date,
+                author: login ?? name ?? "GitHub"
+            )
+        }
+    }
+
     func save(_ data: Store.AppData, sha: String?) async throws -> String {
         guard !repo.isEmpty, !token.isEmpty else { throw SyncError.notConfigured }
-        guard let base = contentsURL,
+        guard let base = contentsURL(),
               var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
         else { throw SyncError.notConfigured }
         components.query = nil
@@ -763,6 +831,28 @@ enum WiFiSyncClient {
 
 // MARK: - Менеджер синхронизации
 
+/// Состояние индикатора синхронизации для интерфейса.
+enum SyncIndicator: Equatable {
+    case off
+    case idle
+    case syncing
+    case sending
+    case synced
+    case waiting
+    case conflict
+    case error
+}
+
+/// Одна запись, изменённая по-разному на двух устройствах.
+struct SyncConflict: Identifiable {
+    let id: String              // ключ записи: "employee:<id>", "shift:<...>", …
+    let title: String
+    let localText: String
+    let remoteText: String
+    let localData: Store.AppData
+    let remoteData: Store.AppData
+}
+
 @MainActor
 final class SyncManager: ObservableObject {
 
@@ -780,6 +870,7 @@ final class SyncManager: ObservableObject {
         static let wifiCode = "turno.sync.wifi.code"
         static let wifiAuto = "turno.sync.wifi.auto"
         static let wifiInitialized = "turno.sync.wifi.initialized"
+        static let baseline = "turno.sync.baseline"
     }
 
     @Published var githubRepo: String {
@@ -802,6 +893,7 @@ final class SyncManager: ObservableObject {
             } else {
                 stopRealtime()
             }
+            updateIdleIndicator()
         }
     }
     /// Wi-Fi-синхронизация временно отключена: значение всегда false.
@@ -826,6 +918,40 @@ final class SyncManager: ObservableObject {
     @Published var lastSync: Date?
     @Published var lastError: String?
 
+    /// Короткое состояние для индикатора в интерфейсе.
+    @Published private(set) var indicator: SyncIndicator = .idle
+    /// Записи, изменённые на двух устройствах по-разному.
+    @Published private(set) var conflicts: [SyncConflict] = []
+    /// История версий файла на GitHub (для отката).
+    @Published var history: [GitHubCommit] = []
+    @Published var isLoadingHistory = false
+    @Published var historyError: String?
+
+    var indicatorText: String {
+        switch indicator {
+        case .off: return githubConfigured ? "Авто выключено" : "Не подключено"
+        case .idle: return "Ожидание"
+        case .syncing: return "Синхронизация…"
+        case .sending: return "Отправка…"
+        case .synced: return "Синхронизировано"
+        case .waiting: return "Ждём сеть"
+        case .conflict: return "Конфликтов: \(conflicts.count)"
+        case .error: return "Ошибка синхронизации"
+        }
+    }
+
+    var indicatorIcon: String {
+        switch indicator {
+        case .off: return "icloud.slash"
+        case .idle: return "clock"
+        case .syncing, .sending: return "arrow.triangle.2.circlepath"
+        case .synced: return "checkmark.circle.fill"
+        case .waiting: return "wifi.exclamationmark"
+        case .conflict: return "exclamationmark.triangle.fill"
+        case .error: return "exclamationmark.icloud"
+        }
+    }
+
     // Оставлены для будущего возврата Wi-Fi, но не запускаются.
     let server = WiFiSyncServer()
     let browser = WiFiBrowser()
@@ -848,6 +974,13 @@ final class SyncManager: ObservableObject {
     private var suppressAutoPush = false
     /// После 403/429 опрос приостанавливается, чтобы не расходовать лимит.
     private var rateLimitedUntil: Date?
+    /// Отпечатки записей на момент последнего согласованного состояния.
+    /// По ним понятно, что изменилось только здесь, только на GitHub или на обоих.
+    private var baseline: [String: String] = [:]
+    private var baselineLoaded = false
+    /// Уже разрешённые конфликты, которые ещё не успели уйти на GitHub.
+    /// Их не нужно показывать заново, пока идёт отправка.
+    private var recentlyResolved: Set<String> = []
 
     init() {
         let defaults = UserDefaults.standard
@@ -864,6 +997,7 @@ final class SyncManager: ObservableObject {
             defaults.set(fresh, forKey: DefaultsKey.wifiCode)
         }
         server.code = wifiCode
+        updateIdleIndicator()
     }
 
     // MARK: Настройка
@@ -874,6 +1008,7 @@ final class SyncManager: ObservableObject {
         self.store = store
         // Любое сохранение данных — повод отправить изменения на GitHub.
         store.onDataSaved = { [weak self] in self?.noteLocalChange() }
+        loadBaselineIfNeeded()
 
         server.handleSnapshot = { [weak self] remote in
             guard let self, let store = self.store else { return remote }
@@ -954,6 +1089,16 @@ final class SyncManager: ObservableObject {
             guard !Task.isCancelled, let self else { return }
             self.githubETag = nil
             self.remoteSHA = nil
+            // Другой репозиторий или токен — старое согласованное состояние
+            // больше не действительно.
+            self.baseline = [:]
+            self.baselineLoaded = true
+            UserDefaults.standard.removeObject(forKey: DefaultsKey.baseline)
+            self.conflicts = []
+            self.recentlyResolved.removeAll()
+            self.lastError = nil
+            self.lastSync = nil
+            self.updateIdleIndicator()
             guard self.githubConfigured, self.isInitialized else { return }
             self.ensureRealtime()
             await self.pollOnce()
@@ -961,6 +1106,40 @@ final class SyncManager: ObservableObject {
     }
 
     // MARK: Realtime-цикл
+
+    /// Восстанавливает индикатор по текущим условиям (без учёта активного запроса).
+    private func updateIdleIndicator() {
+        if !githubConfigured || !autoGitHub {
+            indicator = .off
+        } else if !isInitialized {
+            indicator = .idle
+        } else if !conflicts.isEmpty {
+            indicator = .conflict
+        } else if let lastError, !lastError.isEmpty {
+            indicator = .error
+        } else if pendingPush {
+            indicator = .waiting
+        } else if lastSync != nil {
+            indicator = .synced
+        } else {
+            indicator = .idle
+        }
+    }
+
+    private func loadBaselineIfNeeded() {
+        guard !baselineLoaded else { return }
+        baselineLoaded = true
+        if let stored = UserDefaults.standard.dictionary(forKey: DefaultsKey.baseline) as? [String: String] {
+            baseline = stored
+        }
+    }
+
+    private func saveBaseline(_ fingerprints: [String: String]) {
+        guard fingerprints != baseline else { return }
+        baseline = fingerprints
+        baselineLoaded = true
+        UserDefaults.standard.set(fingerprints, forKey: DefaultsKey.baseline)
+    }
 
     private func ensureRealtime() {
         guard didConfigure, realtimeTask == nil else { return }
@@ -1023,6 +1202,14 @@ final class SyncManager: ObservableObject {
                     lastError = nil
                     statusMessage = "GitHub: синхронизировано \(Self.timeText(Date()))"
                 }
+                if !conflicts.isEmpty {
+                    indicator = .conflict
+                } else if pendingPush {
+                    indicator = .waiting
+                } else {
+                    saveBaseline(store.data.fingerprints())
+                    indicator = .synced
+                }
             case .remote(let remote):
                 githubETag = remote.etag
                 remoteSHA = remote.sha
@@ -1032,15 +1219,38 @@ final class SyncManager: ObservableObject {
                     lastError = nil
                     statusMessage = "GitHub: синхронизировано \(Self.timeText(Date()))"
                 }
+                if !conflicts.isEmpty {
+                    indicator = .conflict
+                } else if pendingPush {
+                    indicator = .waiting
+                } else {
+                    saveBaseline(store.data.fingerprints())
+                    indicator = .synced
+                }
             }
         } catch SyncError.rateLimited {
             pauseForRateLimit()
         } catch SyncError.notFound {
             // Файла ещё нет: не ошибка, отправим его при следующей правке.
             lastError = nil
+            indicator = pendingPush ? .waiting : .idle
         } catch {
             let text = error.localizedDescription
             if lastError != text { lastError = text }
+            indicator = Self.looksOffline(error) ? .waiting : .error
+        }
+    }
+
+    /// Ошибки, которые означают «нет сети», а не проблему с токеном или GitHub.
+    private static func looksOffline(_ error: Error) -> Bool {
+        guard let urlError = error as? URLError else { return false }
+        switch urlError.code {
+        case .notConnectedToInternet, .networkConnectionLost,
+             .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed,
+             .timedOut, .internationalRoamingOff, .dataNotAllowed:
+            return true
+        default:
+            return false
         }
     }
 
@@ -1056,7 +1266,31 @@ final class SyncManager: ObservableObject {
     private func handleRemote(_ remote: Store.AppData) {
         guard let store else { return }
         let before = store.data
+
+        // Сначала выясняем, какие записи изменены по-разному на двух устройствах.
+        let found = detectConflicts(local: before, remote: remote)
+        refreshConflicts(with: found, remote: remote)
+
         let merged = store.merged(with: remote)
+
+        // Пока конфликты не разрешены, применяем чужие изменения, но оставляем
+        // локальные версии конфликтных записей — их не должен выбирать алгоритм.
+        if !conflicts.isEmpty {
+            var safe = merged
+            for conflict in conflicts {
+                safe = safe.replacingRecord(key: conflict.id, with: before)
+            }
+            if !Self.sameSyncState(before, safe) {
+                suppressAutoPush = true
+                store.applySyncSnapshot(safe)
+                suppressAutoPush = false
+            }
+            pendingPush = true
+            statusMessage = "GitHub: есть конфликты — выберите версии в настройках"
+            indicator = .conflict
+            return
+        }
+
         let changedLocally = !Self.sameSyncState(before, merged)
 
         if changedLocally {
@@ -1074,18 +1308,185 @@ final class SyncManager: ObservableObject {
         }
     }
 
+    // MARK: Конфликты
+
+    /// Сравнивает локальную и удалённую версии с последним согласованным
+    /// состоянием. Конфликт — когда одну запись изменили обе стороны.
+    func detectConflicts(local: Store.AppData, remote: Store.AppData) -> [SyncConflict] {
+        loadBaselineIfNeeded()
+        guard !baseline.isEmpty else { return [] }
+
+        let localFP = local.fingerprints()
+        let remoteFP = remote.fingerprints()
+        let keys = Set(localFP.keys).union(remoteFP.keys)
+        var found: [SyncConflict] = []
+
+        for key in keys {
+            guard !recentlyResolved.contains(key) else { continue }
+            guard let base = baseline[key] else { continue }
+            let localValue = localFP[key]
+            let remoteValue = remoteFP[key]
+            guard localValue != remoteValue,
+                  localValue != base,
+                  remoteValue != base else { continue }
+
+            let text = describe(key: key, local: local, remote: remote)
+            found.append(SyncConflict(
+                id: key,
+                title: text.title,
+                localText: text.local,
+                remoteText: text.remote,
+                localData: local,
+                remoteData: remote
+            ))
+        }
+        return found
+    }
+
+    /// Обновляет список конфликтов: убирает уже совпавшие записи и заменяет
+    /// устаревшие версии свежими.
+    private func refreshConflicts(with found: [SyncConflict], remote: Store.AppData) {
+        let localFP = store?.data.fingerprints() ?? [:]
+        let remoteFP = remote.fingerprints()
+        conflicts.removeAll { conflict in
+            localFP[conflict.id] == remoteFP[conflict.id]
+        }
+        for conflict in found {
+            if let index = conflicts.firstIndex(where: { $0.id == conflict.id }) {
+                conflicts[index] = conflict
+            } else {
+                conflicts.append(conflict)
+            }
+        }
+        conflicts.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+    }
+
+    /// Пользователь выбрал версию конфликтной записи.
+    func resolveConflict(_ conflict: SyncConflict, keepLocal: Bool) {
+        guard let store else { return }
+        let source = keepLocal ? conflict.localData : conflict.remoteData
+        store.applyRecordChoice(key: conflict.id, from: source)
+        recentlyResolved.insert(conflict.id)
+        conflicts.removeAll { $0.id == conflict.id }
+        if conflicts.isEmpty {
+            indicator = .waiting
+            statusMessage = "Конфликты разрешены — отправляем на GitHub"
+            schedulePush(after: 0.4)
+        } else {
+            indicator = .conflict
+        }
+    }
+
+    /// Текст для карточки конфликта: заголовок и обе версии.
+    private func describe(key: String, local: Store.AppData, remote: Store.AppData)
+        -> (title: String, local: String, remote: String) {
+        let parts = key.split(separator: ":", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { return ("Запись", "—", "—") }
+        let kind = parts[0]
+        let id = parts[1]
+
+        func employeeName(_ data: Store.AppData, _ employeeID: String) -> String {
+            data.employees.first(where: { $0.id.uuidString == employeeID })?.name ?? "Сотрудник"
+        }
+        func dateText(_ dayKey: String) -> String {
+            guard let date = Keys.date(fromDayKey: dayKey) else { return dayKey }
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "ru_RU")
+            f.dateFormat = "d MMM yyyy"
+            return f.string(from: date)
+        }
+        func money(_ value: Double) -> String {
+            Money.grouped(value) + " ₽"
+        }
+
+        switch kind {
+        case "employee":
+            let l = local.employees.first(where: { $0.id.uuidString == id })
+            let r = remote.employees.first(where: { $0.id.uuidString == id })
+            let title = l?.name ?? r?.name ?? "Сотрудник"
+            func text(_ value: Employee?) -> String {
+                guard let value else { return "Удалён" }
+                return "\(value.name) · \(value.role.rawValue) · \(money(value.defaultShiftRate))"
+            }
+            return (title, text(l), text(r))
+
+        case "shift":
+            let employeeID = id.split(separator: "|").first.map(String.init) ?? id
+            let dayKey = id.split(separator: "|").last.map(String.init) ?? id
+            let title = "Смена: \(employeeName(local, employeeID)) · \(dateText(dayKey))"
+            func text(_ value: Store.AppData) -> String {
+                guard let shift = value.shifts[id] else { return "Удалена" }
+                var result = shift.kind.rawValue
+                if let rate = shift.rateOverride {
+                    result += " · \(money(rate))"
+                }
+                return result
+            }
+            return (title, text(local), text(remote))
+
+        case "revenue":
+            let title = "Выручка за \(dateText(id))"
+            func text(_ value: Store.AppData) -> String {
+                guard let revenue = value.revenues[id] else { return "Удалена" }
+                return "Кальян \(money(revenue.hookah)) · Бар \(money(revenue.bar))"
+            }
+            return (title, text(local), text(remote))
+
+        case "threshold":
+            let l = local.thresholds.first(where: { $0.id.uuidString == id })
+            let r = remote.thresholds.first(where: { $0.id.uuidString == id })
+            let title = "Порог надбавки"
+            func text(_ value: BonusThreshold?) -> String {
+                guard let value else { return "Удалён" }
+                return "от \(money(value.revenueFrom)) → +\(money(value.amount))"
+            }
+            return (title, text(l), text(r))
+
+        case "fine":
+            let l = local.fines.first(where: { $0.id.uuidString == id })
+            let r = remote.fines.first(where: { $0.id.uuidString == id })
+            let employeeID = (l ?? r)?.employeeID.uuidString ?? ""
+            let title = "Штраф: \(employeeName(local, employeeID))"
+            func text(_ value: Fine?) -> String {
+                guard let value else { return "Удалён" }
+                return "\(money(value.totalAmount)) · \(value.note)"
+            }
+            return (title, text(l), text(r))
+
+        case "premium":
+            let l = local.premiums.first(where: { $0.id.uuidString == id })
+            let r = remote.premiums.first(where: { $0.id.uuidString == id })
+            let employeeID = (l ?? r)?.employeeID.uuidString ?? ""
+            let title = "Премия: \(employeeName(local, employeeID))"
+            func text(_ value: Premium?) -> String {
+                guard let value else { return "Удалена" }
+                return "\(money(value.amount)) · \(value.note)"
+            }
+            return (title, text(l), text(r))
+
+        default:
+            return ("Запись", "—", "—")
+        }
+    }
+
     /// Отправка изменений. Не чаще одного PUT в секунду.
     private func pushOnce() async {
         guard let store, !store.loadFailed, !busy,
               autoGitHub, githubConfigured, isInitialized else { return }
+        guard conflicts.isEmpty else {
+            indicator = .conflict
+            return
+        }
         if let until = rateLimitedUntil, Date() < until {
             pendingPushDate = until
+            indicator = .waiting
             return
         }
 
         pendingPush = false
         pendingPushDate = nil
         busy = true
+        indicator = .sending
         defer {
             busy = false
             lastPushDate = Date()
@@ -1118,12 +1519,16 @@ final class SyncManager: ObservableObject {
             lastSync = Date()
             lastError = nil
             statusMessage = "GitHub: отправлено \(Self.timeText(Date()))"
+            saveBaseline(store.data.fingerprints())
+            recentlyResolved.removeAll()
+            indicator = .synced
         } catch SyncError.conflict {
             // Кто-то успел записать файл раньше: перечитаем и сольём.
             githubETag = nil
             remoteSHA = nil
             pendingPush = true
             pendingPushDate = Date()
+            indicator = .waiting
         } catch SyncError.rateLimited {
             pauseForRateLimit()
             pendingPush = true
@@ -1133,6 +1538,7 @@ final class SyncManager: ObservableObject {
             if lastError != text { lastError = text }
             pendingPush = true
             pendingPushDate = Date().addingTimeInterval(5)
+            indicator = Self.looksOffline(error) ? .waiting : .error
         }
     }
 
@@ -1140,6 +1546,7 @@ final class SyncManager: ObservableObject {
         guard autoGitHub, githubConfigured, isInitialized else { return }
         pendingPush = true
         pendingPushDate = Date().addingTimeInterval(delay)
+        indicator = conflicts.isEmpty ? .waiting : .conflict
         ensureRealtime()
     }
 
@@ -1152,6 +1559,7 @@ final class SyncManager: ObservableObject {
         rateLimitedUntil = Date().addingTimeInterval(300)
         lastError = SyncError.rateLimited.localizedDescription
         statusMessage = "GitHub: пауза из-за лимита запросов"
+        indicator = .waiting
     }
 
     /// Ручная синхронизация: полное чтение, слияние и (при необходимости) запись.
@@ -1190,6 +1598,16 @@ final class SyncManager: ObservableObject {
             githubETag = remote.etag
             remoteSHA = remote.sha
 
+            var found: [SyncConflict] = []
+            if direction == .merge {
+                found = detectConflicts(local: store.data, remote: remote.data)
+                refreshConflicts(with: found, remote: remote.data)
+            } else {
+                // Пользователь явно выбрал направление — конфликты больше не актуальны.
+                conflicts = []
+                recentlyResolved.removeAll()
+            }
+
             let merged: Store.AppData
             switch direction {
             case .merge:
@@ -1199,9 +1617,29 @@ final class SyncManager: ObservableObject {
             case .upload:
                 merged = store.authoritative(over: remote.data)
             }
+
+            // При конфликте сохраняем локальные версии спорных записей.
+            var toApply = merged
+            if direction == .merge, !conflicts.isEmpty {
+                let before = store.data
+                for conflict in conflicts {
+                    toApply = toApply.replacingRecord(key: conflict.id, with: before)
+                }
+            }
+
             suppressAutoPush = true
-            store.applySyncSnapshot(merged)
+            store.applySyncSnapshot(toApply)
             suppressAutoPush = false
+
+            // Пока конфликты не разрешены, ничего не отправляем.
+            if direction == .merge, !conflicts.isEmpty {
+                markInitialized()
+                lastSync = Date()
+                lastError = nil
+                statusMessage = "Найдены конфликты — выберите версию в настройках"
+                indicator = .conflict
+                return
+            }
 
             let current = store.syncSnapshot()
             let needsUpload = direction == .upload || !Self.sameSyncState(current, remote.data)
@@ -1230,6 +1668,9 @@ final class SyncManager: ObservableObject {
             lastSync = Date()
             lastError = nil
             statusMessage = "GitHub: синхронизировано \(Self.timeText(Date()))"
+            saveBaseline(store.data.fingerprints())
+            recentlyResolved.removeAll()
+            indicator = .synced
         } catch SyncError.rateLimited {
             pauseForRateLimit()
         } catch {
@@ -1237,6 +1678,94 @@ final class SyncManager: ObservableObject {
             if !silent {
                 statusMessage = "GitHub: ошибка"
             }
+            indicator = Self.looksOffline(error) ? .waiting : .error
+        }
+    }
+
+    // MARK: История версий и откат
+
+    /// Загружает последние коммиты файла синхронизации.
+    func loadHistory() {
+        guard githubConfigured else {
+            historyError = SyncError.notConfigured.localizedDescription
+            return
+        }
+        isLoadingHistory = true
+        historyError = nil
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let items = try await self.makeClient().history(limit: 25)
+                self.history = items
+            } catch {
+                self.historyError = error.localizedDescription
+            }
+            self.isLoadingHistory = false
+        }
+    }
+
+    /// Откатывает данные к состоянию из выбранного коммита.
+    func rollback(to commit: GitHubCommit) {
+        Task { [weak self] in
+            guard let self else { return }
+            var waited = 0
+            while self.busy, waited < 100 {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                waited += 1
+            }
+            await self.performRollback(commit)
+        }
+    }
+
+    private func performRollback(_ commit: GitHubCommit) async {
+        guard let store else { return }
+        guard githubConfigured else {
+            lastError = SyncError.notConfigured.localizedDescription
+            return
+        }
+        guard !busy else { return }
+
+        busy = true
+        isSyncing = true
+        indicator = .syncing
+        defer {
+            busy = false
+            isSyncing = false
+            ensureRealtime()
+        }
+
+        do {
+            let client = makeClient()
+            let current = try await client.load()
+            let old = try await client.load(at: commit.id)
+
+            // Берём состояние на момент коммита и делаем его главным:
+            // всё, что появилось позже, удаляется tombstone-ами.
+            let restored = store.adopting(old.data)
+            suppressAutoPush = true
+            store.applySyncSnapshot(restored)
+            let authoritative = store.authoritative(over: current.data)
+            store.applySyncSnapshot(authoritative)
+            suppressAutoPush = false
+
+            let snapshot = store.syncSnapshot()
+            let freshSHA = try await client.save(snapshot, sha: current.sha)
+            if !freshSHA.isEmpty { remoteSHA = freshSHA }
+            githubETag = nil
+            conflicts = []
+            recentlyResolved.removeAll()
+            saveBaseline(store.data.fingerprints())
+            markInitialized()
+            lastSync = Date()
+            lastError = nil
+            statusMessage = "GitHub: откат на \(Self.timeText(commit.date))"
+            indicator = .synced
+            history = []
+        } catch SyncError.rateLimited {
+            pauseForRateLimit()
+        } catch {
+            lastError = error.localizedDescription
+            indicator = Self.looksOffline(error) ? .waiting : .error
         }
     }
 
